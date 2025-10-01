@@ -37,7 +37,7 @@ type FixProposal = {
   filePath: string;
 };
 
-type SelfHealState = 'idle' | 'analyzing' | 'showing-fix' | 'applying';
+type SelfHealState = 'idle' | 'analyzing' | 'showing-fix' | 'applying' | 'success';
 
 type ApiKeyStatus = 'not-set' | 'valid' | 'invalid' | 'checking';
 
@@ -67,6 +67,28 @@ export const AiAssistantTab: React.FC<{
   const [apiKeyInput, setApiKeyInput] = React.useState('');
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+
+  // Typing animation hook
+  const useTypingAnimation = (text: string, speed: number = 20) => {
+    const [displayedText, setDisplayedText] = React.useState('');
+
+    React.useEffect(() => {
+      setDisplayedText('');
+      let index = 0;
+      const timer = setInterval(() => {
+        if (index < text.length) {
+          setDisplayedText(text.slice(0, index + 1));
+          index++;
+        } else {
+          clearInterval(timer);
+        }
+      }, speed);
+
+      return () => clearInterval(timer);
+    }, [text, speed]);
+
+    return displayedText;
+  };
 
   // Load API key on mount
   React.useEffect(() => {
@@ -342,11 +364,7 @@ export const AiAssistantTab: React.FC<{
       });
 
       setAnalysisSteps(prev => [...prev, '✓ Fix applied successfully']);
-      setTimeout(() => {
-        setSelfHealState('idle');
-        setFixProposal(null);
-        setAnalysisSteps([]);
-      }, 2000);
+      setSelfHealState('success');
     } catch (error) {
       setAnalysisSteps(prev => [...prev, `✗ Failed to apply: ${error instanceof Error ? error.message : 'Unknown error'}`]);
       setSelfHealState('showing-fix');
@@ -409,24 +427,36 @@ export const AiAssistantTab: React.FC<{
   return (
     <div className='vbox ai-assistant-tab'>
       <div className='ai-assistant-header'>
-        <span className='codicon codicon-sparkle'></span>
-        <span className='ai-assistant-title'>AI Assistant</span>
-        {model && (
-          <span className='ai-assistant-context-info'>
-            {model.actions.length} actions • {model.errorDescriptors.length} errors
-          </span>
-        )}
-        <div className='ai-assistant-status'>
-          {getStatusIcon()}
-          <span className='ai-status-text'>{getStatusText()}</span>
+        <div className='ai-header-left'>
+          <span className='codicon codicon-sparkle ai-header-icon'></span>
+          <span className='ai-assistant-title'>AI Assistant</span>
+          {model && (
+            <div className='ai-assistant-context-info'>
+              <span className='codicon codicon-layers'></span>
+              <span className='ai-context-text'>{model.actions.length} actions</span>
+              <span className='ai-context-separator'>•</span>
+              <span className='codicon codicon-error'></span>
+              <span className='ai-context-text'>{model.errorDescriptors.length} errors</span>
+            </div>
+          )}
         </div>
-        <button
-          className='ai-settings-button'
-          onClick={() => setShowSettings(true)}
-          title='Configure API key'
-        >
-          <span className='codicon codicon-settings-gear'></span>
-        </button>
+        <div className='ai-header-right'>
+          <div className='ai-assistant-status'>
+            {getStatusIcon()}
+            <span className='ai-status-text'>{getStatusText()}</span>
+          </div>
+          <div className='ai-model-chip'>
+            <span className='codicon codicon-hubot'></span>
+            <span className='ai-model-name'>Claude 3.5 Sonnet</span>
+          </div>
+          <button
+            className='ai-settings-button'
+            onClick={() => setShowSettings(true)}
+            title='Configure API key'
+          >
+            <span className='codicon codicon-settings-gear'></span>
+          </button>
+        </div>
       </div>
 
       {/* Settings Modal */}
@@ -516,6 +546,10 @@ export const AiAssistantTab: React.FC<{
 
       {/* Self-Heal Section */}
       <div className='ai-self-heal-section'>
+        {/* Test Metadata Card */}
+        {model && <TestMetadataCard model={model} hasErrors={hasErrors} useTypingAnimation={useTypingAnimation} />}
+
+        {/* Self-Heal Actions */}
         {apiKeyStatus !== 'valid' ? (
           <div className='ai-self-heal-idle'>
             <button
@@ -539,11 +573,11 @@ export const AiAssistantTab: React.FC<{
               <span className='codicon codicon-wand'></span>
               Self-Heal
             </button>
-            <p className='ai-self-heal-hint'>
-              {hasErrors
-                ? 'Automatically analyze and fix test failures'
-                : 'No errors detected - test passed successfully'}
-            </p>
+            {!hasErrors && (
+              <p className='ai-self-heal-hint'>
+                No errors detected - test passed successfully
+              </p>
+            )}
           </div>
         )}
 
@@ -573,12 +607,16 @@ export const AiAssistantTab: React.FC<{
               </span>
             </div>
 
-            <div className='ai-proposal-issue'>
-              <strong>Issue:</strong> {fixProposal.issue}
-            </div>
+            <div className='ai-proposal-content'>
+              <div className='ai-proposal-section'>
+                <div className='ai-proposal-section-title'>Issue</div>
+                <div className='ai-proposal-section-text'>{fixProposal.issue}</div>
+              </div>
 
-            <div className='ai-proposal-explanation'>
-              {fixProposal.explanation}
+              <div className='ai-proposal-section'>
+                <div className='ai-proposal-section-title'>Explanation</div>
+                <div className='ai-proposal-section-text'>{fixProposal.explanation}</div>
+              </div>
             </div>
 
             <div className='ai-proposal-diff'>
@@ -630,21 +668,53 @@ export const AiAssistantTab: React.FC<{
             </div>
           </div>
         )}
+
+        {selfHealState === 'success' && fixProposal && (
+          <div className='ai-self-heal-success'>
+            <div className='ai-success-header'>
+              <span className='codicon codicon-pass-filled'></span>
+              <span className='ai-success-title'>Fix Applied Successfully</span>
+            </div>
+            <div className='ai-success-content'>
+              <div className='ai-success-message'>
+                The test file has been updated with the suggested fix.
+              </div>
+              <div className='ai-success-file'>
+                <span className='codicon codicon-file-code'></span>
+                <span className='ai-success-file-path'>{fixProposal.filePath}</span>
+              </div>
+            </div>
+            <div className='ai-success-actions'>
+              <button
+                className='ai-action-close'
+                onClick={() => {
+                  setSelfHealState('idle');
+                  setFixProposal(null);
+                  setAnalysisSteps([]);
+                }}
+              >
+                <span className='codicon codicon-close'></span>
+                Close
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Advanced Chat Section */}
-      <div className='ai-advanced-section'>
-        <button
-          className='ai-advanced-toggle'
-          onClick={() => setShowAdvanced(!showAdvanced)}
-        >
-          <span className={`codicon codicon-chevron-${showAdvanced ? 'down' : 'right'}`}></span>
-          Advanced Chat
-        </button>
+      {/* Advanced Chat Section - Hidden but functional */}
+      {false && (
+        <div className='ai-advanced-section'>
+          <button
+            className='ai-advanced-toggle'
+            onClick={() => setShowAdvanced(!showAdvanced)}
+          >
+            <span className={`codicon codicon-chevron-${showAdvanced ? 'down' : 'right'}`}></span>
+            Advanced Chat
+          </button>
 
-        {showAdvanced && (
-          <>
-            <div className='ai-assistant-messages'>
+          {showAdvanced && (
+            <>
+              <div className='ai-assistant-messages'>
               {messages.map(message => (
                 <div key={message.id} className={`ai-message ai-message-${message.role}`}>
                   <div className='ai-message-icon'>
@@ -710,8 +780,78 @@ export const AiAssistantTab: React.FC<{
               >
                 <span className='codicon codicon-send'></span>
               </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Helper functions to extract test info
+function getTestFile(model: any): string {
+  const title = model?.title || '';
+  const fileMatch = title.match(/^([^›]+\.spec\.[tj]s)/);
+  return fileMatch ? fileMatch[1].trim() : 'Unknown file';
+}
+
+function getErrorMessage(model: any): string {
+  const errors = model?.errorDescriptors || [];
+  if (errors.length === 0) return 'No error message';
+
+  const firstError = errors[0];
+  const message = firstError?.message || '';
+
+  // Show more of the error message (up to 500 characters)
+  if (message.length > 500) {
+    return message.substring(0, 500) + '...';
+  }
+
+  return message || 'Unknown error';
+}
+
+/**
+ * Test Metadata Card with typing animation
+ */
+const TestMetadataCard: React.FC<{
+  model: any;
+  hasErrors: boolean;
+  useTypingAnimation: (text: string, speed?: number) => string;
+}> = ({ model, hasErrors, useTypingAnimation }) => {
+  const testTitle = model.title || 'Unknown test';
+  const testFile = getTestFile(model);
+  const errorMessage = getErrorMessage(model);
+
+  const animatedTitle = useTypingAnimation(testTitle, 15);
+  const animatedFile = useTypingAnimation(testFile, 15);
+  const animatedError = useTypingAnimation(errorMessage, 10);
+
+  return (
+    <div className='ai-test-metadata'>
+      <div className='ai-metadata-header'>
+        <span className='codicon codicon-beaker'></span>
+        <span className='ai-metadata-title'>Test Information</span>
+      </div>
+      <div className='ai-metadata-content'>
+        <div className='ai-metadata-row'>
+          <span className='ai-metadata-label'>Test:</span>
+          <span className='ai-metadata-value'>{animatedTitle}</span>
+        </div>
+        <div className='ai-metadata-row'>
+          <span className='ai-metadata-label'>File:</span>
+          <span className='ai-metadata-value ai-metadata-file'>{animatedFile}</span>
+        </div>
+        {hasErrors && (
+          <div className='ai-metadata-error'>
+            <div className='ai-metadata-error-icon'>
+              <span className='codicon codicon-error'></span>
             </div>
-          </>
+            <div className='ai-metadata-error-content'>
+              <div className='ai-metadata-error-title'>Error</div>
+              <div className='ai-metadata-error-message'>{animatedError}</div>
+            </div>
+          </div>
         )}
       </div>
     </div>

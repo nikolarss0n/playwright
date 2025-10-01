@@ -24,33 +24,68 @@
 .ai-assistant-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 16px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--vscode-panel-border);
   background-color: var(--vscode-sideBar-background);
 }
 
-.ai-assistant-header .codicon-sparkle {
-  color: var(--vscode-symbolIcon-colorForeground);
-  font-size: 16px;
+.ai-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.ai-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-header-icon {
+  font-size: 18px;
+  color: #e65100;
 }
 
 .ai-assistant-title {
   font-weight: 600;
-  font-size: 13px;
-  color: var(--vscode-foreground);
+  font-size: 14px;
+  color: #e65100;
 }
 
 .ai-assistant-context-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, rgba(230, 81, 0, 0.08) 0%, rgba(255, 111, 0, 0.08) 100%);
+  border: 1px solid rgba(230, 81, 0, 0.2);
+  border-radius: 12px;
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+}
+
+.ai-assistant-context-info .codicon {
+  font-size: 12px;
+  color: #e65100;
+}
+
+.ai-context-text {
+  font-weight: 500;
+  color: #e65100;
+  letter-spacing: 0.2px;
+}
+
+.ai-context-separator {
+  color: rgba(230, 81, 0, 0.4);
+  margin: 0 2px;
 }
 
 .ai-assistant-status {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
   padding: 4px 10px;
   border-radius: 12px;
   background-color: var(--vscode-badge-background);
@@ -60,6 +95,29 @@
 .ai-status-text {
   color: var(--vscode-badge-foreground);
   font-weight: 500;
+}
+
+.ai-model-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  margin-left: 8px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(230, 81, 0, 0.15) 0%, rgba(255, 111, 0, 0.15) 100%);
+  border: 1px solid rgba(230, 81, 0, 0.3);
+  font-size: 11px;
+}
+
+.ai-model-chip .codicon {
+  font-size: 13px;
+  color: #e65100;
+}
+
+.ai-model-name {
+  color: #e65100;
+  font-weight: 600;
+  letter-spacing: 0.3px;
 }
 
 .ai-settings-button {
@@ -301,8 +359,120 @@
 
 /* Self-Heal Section */
 .ai-self-heal-section {
-  padding: 16px;
+  padding: 24px;
   border-bottom: 1px solid var(--vscode-panel-border);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Test Metadata Card */
+.ai-test-metadata {
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.ai-metadata-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background-color: var(--vscode-sideBar-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.ai-metadata-header .codicon {
+  font-size: 16px;
+  color: #e65100;
+}
+
+.ai-metadata-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e65100;
+}
+
+.ai-metadata-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ai-metadata-row {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ai-metadata-label {
+  color: #e65100;
+  font-weight: 600;
+  min-width: 40px;
+}
+
+.ai-metadata-value {
+  color: var(--vscode-foreground);
+  flex: 1;
+  word-break: break-word;
+}
+
+.ai-metadata-file {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  color: #e65100;
+}
+
+.ai-metadata-error {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px;
+  background: rgba(255, 9, 108, 0.08);
+  border: 1px solid rgba(255, 9, 108, 0.2);
+  border-radius: 8px;
+}
+
+.ai-metadata-error-icon {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(255, 9, 108, 0.15);
+}
+
+.ai-metadata-error-icon .codicon {
+  font-size: 14px;
+  color: #ff096c;
+}
+
+.ai-metadata-error-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ai-metadata-error-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #ff096c;
+}
+
+.ai-metadata-error-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-editor-font-family);
 }
 
 .ai-self-heal-idle {
@@ -310,7 +480,6 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  padding: 24px;
 }
 
 .ai-self-heal-button {
@@ -318,7 +487,7 @@
   align-items: center;
   gap: 10px;
   padding: 14px 28px;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  background: linear-gradient(135deg, #e65100 0%, #ff6f00 100%);
   color: white;
   border: none;
   border-radius: 8px;
@@ -326,12 +495,13 @@
   font-weight: 600;
   cursor: pointer;
   transition: all 0.3s ease;
-  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  box-shadow: 0 4px 12px rgba(230, 81, 0, 0.3);
 }
 
 .ai-self-heal-button:hover:not(.disabled) {
   transform: translateY(-2px);
-  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+  box-shadow: 0 6px 16px rgba(230, 81, 0, 0.4);
+  background: linear-gradient(135deg, #ff6f00 0%, #ff8f00 100%);
 }
 
 .ai-self-heal-button:active:not(.disabled) {
@@ -359,10 +529,11 @@
 /* Analyzing State */
 .ai-self-heal-analyzing,
 .ai-self-heal-applying {
-  padding: 20px;
   background-color: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border);
-  border-radius: 8px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .ai-analysis-header,
@@ -370,23 +541,40 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--vscode-foreground);
-  margin-bottom: 16px;
+  padding: 12px 16px;
+  background-color: var(--vscode-sideBar-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .ai-analysis-header .codicon,
 .ai-applying-header .codicon {
   font-size: 16px;
-  color: #667eea;
+  color: #e65100;
+  animation: spin 1s linear infinite;
+}
+
+.ai-analysis-header span:last-child,
+.ai-applying-header span:last-child {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e65100;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ai-analysis-steps {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-left: 26px;
+  padding: 16px;
+  padding-left: 42px;
 }
 
 .ai-analysis-step {
@@ -394,41 +582,58 @@
   color: var(--vscode-descriptionForeground);
   padding: 4px 0;
   position: relative;
+  line-height: 1.6;
+  animation: slideInStep 0.3s ease-out;
+  opacity: 0;
+  animation-fill-mode: forwards;
+}
+
+@keyframes slideInStep {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .ai-analysis-step::before {
   content: '•';
   position: absolute;
   left: -14px;
-  color: #667eea;
+  color: #e65100;
+  font-size: 16px;
 }
 
 /* Fix Proposal */
 .ai-self-heal-proposal {
   background-color: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border);
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .ai-proposal-header {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px;
+  padding: 12px 16px;
   background-color: var(--vscode-sideBar-background);
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .ai-proposal-header .codicon {
-  font-size: 18px;
-  color: #f59e0b;
+  font-size: 16px;
+  color: #e65100;
 }
 
 .ai-proposal-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
-  color: var(--vscode-foreground);
+  color: #e65100;
   flex: 1;
 }
 
@@ -456,20 +661,33 @@
   color: #ef4444;
 }
 
-.ai-proposal-issue {
+.ai-proposal-content {
   padding: 16px;
-  font-size: 13px;
-  color: var(--vscode-foreground);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-.ai-proposal-explanation {
-  padding: 16px;
-  font-size: 12px;
+.ai-proposal-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-proposal-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #e65100;
+}
+
+.ai-proposal-section-text {
+  font-size: 13px;
   line-height: 1.6;
-  color: var(--vscode-descriptionForeground);
+  color: var(--vscode-foreground);
   white-space: pre-line;
-  border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .ai-proposal-diff {
@@ -545,8 +763,9 @@
 
 .ai-proposal-actions {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   padding: 16px;
+  background-color: var(--vscode-sideBar-background);
 }
 
 .ai-action-accept,
@@ -557,9 +776,9 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 10px 16px;
+  padding: 12px 20px;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -567,22 +786,33 @@
 }
 
 .ai-action-accept {
-  background-color: #10b981;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
   color: white;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
 }
 
 .ai-action-accept:hover {
-  background-color: #059669;
-  transform: translateY(-1px);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+}
+
+.ai-action-accept:active {
+  transform: translateY(0);
 }
 
 .ai-action-retry {
   background-color: var(--vscode-button-secondaryBackground);
   color: var(--vscode-button-secondaryForeground);
+  border: 1px solid var(--vscode-input-border);
 }
 
 .ai-action-retry:hover {
   background-color: var(--vscode-button-secondaryHoverBackground);
+  transform: translateY(-1px);
+}
+
+.ai-action-retry:active {
+  transform: translateY(0);
 }
 
 .ai-action-reject {
@@ -594,6 +824,112 @@
 .ai-action-reject:hover {
   background-color: var(--vscode-input-background);
   border-color: var(--vscode-focusBorder);
+  transform: translateY(-1px);
+}
+
+.ai-action-reject:active {
+  transform: translateY(0);
+}
+
+/* Success State */
+.ai-self-heal-success {
+  background-color: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  animation: slideIn 0.3s ease-out;
+}
+
+.ai-success-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  background-color: var(--vscode-sideBar-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.ai-success-header .codicon {
+  font-size: 20px;
+  color: #10b981;
+}
+
+.ai-success-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #10b981;
+}
+
+.ai-success-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ai-success-message {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--vscode-foreground);
+}
+
+.ai-success-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background-color: var(--vscode-editor-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+}
+
+.ai-success-file .codicon {
+  font-size: 14px;
+  color: #e65100;
+}
+
+.ai-success-file-path {
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family);
+  color: var(--vscode-textLink-foreground);
+}
+
+.ai-success-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 16px;
+  background-color: var(--vscode-sideBar-background);
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+.ai-action-close {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 6px;
+  background-color: transparent;
+  color: var(--vscode-foreground);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.ai-action-close:hover {
+  background-color: var(--vscode-input-background);
+  border-color: var(--vscode-focusBorder);
+  transform: translateY(-1px);
+}
+
+.ai-action-close:active {
+  transform: translateY(0);
+}
+
+.ai-action-close .codicon {
+  font-size: 14px;
 }
 
 /* Advanced Section */

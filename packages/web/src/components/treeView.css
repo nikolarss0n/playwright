@@ -30,8 +30,15 @@
   cursor: pointer;
   align-items: center;
   white-space: nowrap;
-  line-height: 28px;
-  padding-left: 5px;
+  line-height: 32px;
+  padding: 4px 8px 4px 5px;
+  margin: 2px 4px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.tree-view-entry:hover:not(.selected) {
+  background-color: var(--vscode-list-hoverBackground);
 }
 
 .tree-view-content.not-selectable > .tree-view-entry {
@@ -44,6 +51,7 @@
 
 .tree-view-entry.selected {
   z-index: 10;
+  font-weight: 500;
 }
 
 .tree-view-indent {
@@ -53,11 +61,14 @@
 .tree-view-content:focus .tree-view-entry.selected {
   background-color: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground);
-  outline: 1px solid var(--vscode-focusBorder);
+  border-left: 3px solid #e65100;
+  padding-left: 2px;
 }
 
 .tree-view-content .tree-view-entry.selected {
   background-color: var(--vscode-list-inactiveSelectionBackground);
+  border-left: 3px solid #e65100;
+  padding-left: 2px;
 }
 
 .tree-view-content:focus .tree-view-entry.selected * {
@@ -83,14 +94,17 @@
 
 .tree-view-entry.error {
   color: var(--vscode-list-errorForeground);
-  background-color: var(--vscode-inputValidation-errorBackground);
+  background: linear-gradient(135deg, rgba(255, 9, 108, 0.1) 0%, rgba(255, 9, 108, 0.15) 100%);
+  border-left: 3px solid #ff096c;
 }
 
 .tree-view-entry.warning {
   color: var(--vscode-list-warningForeground);
-  background-color: var(--vscode-inputValidation-warningBackground);
+  background: linear-gradient(135deg, rgba(255, 165, 0, 0.1) 0%, rgba(255, 165, 0, 0.15) 100%);
+  border-left: 3px solid #ffa500;
 }
 
 .tree-view-entry.info {
-  background-color: var(--vscode-inputValidation-infoBackground);
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.1) 0%, rgba(33, 150, 243, 0.15) 100%);
+  border-left: 3px solid #2196f3;
 }

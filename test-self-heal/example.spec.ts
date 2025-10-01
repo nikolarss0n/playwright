@@ -32,11 +32,16 @@ test.describe('Self-Heal Demo Tests', () => {
   test('test 3 - acting before page is ready', async ({ page }) => {
     await page.goto('https://demo.playwright.dev/todomvc/');
 
-    // Problem: Trying to toggle all when there are no todos
-    // Should create todos first!
+    // First create some todos
+    await page.getByPlaceholder('What needs to be done?').fill('Task 1');
+    await page.getByPlaceholder('What needs to be done?').press('Enter');
+    await page.getByPlaceholder('What needs to be done?').fill('Task 2');
+    await page.getByPlaceholder('What needs to be done?').press('Enter');
+
+    // Now toggle all todos to complete
     await page.locator('.toggle-all').click();
 
-    // This will fail because there are no todos to toggle
+    // Verify all items are complete (0 items left)
     await expect(page.locator('.todo-count')).toContainText('0 items left');
   });
 
@@ -52,8 +57,8 @@ test.describe('Self-Heal Demo Tests', () => {
     await page.getByPlaceholder('What needs to be done?').fill('Task 3');
     await page.getByPlaceholder('What needs to be done?').press('Enter');
 
-    // Problem: This matches all todo items, need to be specific
-    await page.locator('.todo-list li').click(); // Which one?
+    // Click specifically on the first todo item using role and text
+    await page.getByRole('listitem').filter({ hasText: 'Task 1' }).click();
 
     await expect(page.locator('.todo-list li')).toHaveCount(3);
   });
@@ -66,17 +71,22 @@ test.describe('Self-Heal Demo Tests', () => {
     await page.getByPlaceholder('What needs to be done?').press('Enter');
 
     // Problem: Wrong expectation - it says "1 item left" not "1 items left"
-    await expect(page.locator('.todo-count')).toHaveText('1 items left');
+    await expect(page.locator('.todo-count')).toHaveText('1 item left');
   });
 
   // EASY: Element doesn't exist at all
   test('test 6 - element does not exist', async ({ page }) => {
     await page.goto('https://demo.playwright.dev/todomvc/');
 
-    // Problem: This button doesn't exist in TodoMVC
-    await page.locator('#delete-all-button').click();
+    // First add and complete a todo
+    await page.getByPlaceholder('What needs to be done?').fill('Task to delete');
+    await page.getByPlaceholder('What needs to be done?').press('Enter');
+    await page.locator('.toggle').click();
 
-    await expect(page.locator('.todo-list')).toBeEmpty();
+    // Use the correct "Clear completed" button
+    await page.getByRole('button', { name: 'Clear completed' }).click();
+
+    await expect(page.locator('.todo-list')).not.toBeVisible();
   });
 
   // HARD: Wrong navigation - trying to use element from wrong page
@@ -97,10 +107,14 @@ test.describe('Self-Heal Demo Tests', () => {
 
     await page.getByPlaceholder('What needs to be done?').fill('Task 1');
     await page.getByPlaceholder('What needs to be done?').press('Enter');
+    
+    // Complete the todo first
+    await page.locator('.toggle').click();
+    
+    // Wait for the clear-completed button to be visible and click it
+    await page.getByRole('button', { name: 'Clear completed' }).click();
 
-    // Problem: The footer appears with animation, need to wait for visibility
-    await page.locator('.clear-completed').click(); // Might not be visible yet
-
-    await expect(page.locator('.todo-list li')).toHaveClass(/completed/);
+    // Verify the todo is removed (list should be empty)
+    await expect(page.locator('.todo-list li')).toHaveCount(0);
   });
 });

@@ -18,10 +18,11 @@
   position: relative;
   display: flex;
   color: var(--vscode-sideBarTitle-foreground);
-  min-height: 30px;
+  min-height: 36px;
   align-items: center;
   flex: none;
-  padding-right: 4px;
+  padding: 0 8px;
+  background-color: var(--vscode-sideBar-background);
 }
 
 .toolbar.toolbar-sidebar-background {
@@ -50,25 +51,46 @@
 }
 
 .toolbar input {
-  padding: 0 5px;
-  line-height: 24px;
+  padding: 6px 10px;
+  line-height: 20px;
   outline: none;
   margin: 0 4px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  border: 1px solid var(--vscode-input-border);
+}
+
+.toolbar input:focus {
+  border-color: #e65100;
+  box-shadow: 0 0 0 2px rgba(230, 81, 0, 0.1);
 }
 
 .toolbar select {
   background: none;
   outline: none;
-  padding: 3px;
-  margin: 2px;
+  padding: 6px 10px;
+  margin: 0 4px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: 1px solid var(--vscode-input-border);
+}
+
+.toolbar select:hover {
+  border-color: rgba(230, 81, 0, 0.5);
+}
+
+.toolbar select:focus {
+  border-color: #e65100;
+  box-shadow: 0 0 0 2px rgba(230, 81, 0, 0.1);
 }
 
 .toolbar option {
-  background-color: var(--vscode-tab-activeBackground)
+  background-color: var(--vscode-tab-activeBackground);
+  padding: 6px;
 }
 
 .toolbar input, .toolbar select {
-  border: none;
   color: var(--vscode-input-foreground);
   background-color: var(--vscode-input-background);
 }
