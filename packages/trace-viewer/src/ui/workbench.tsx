@@ -32,6 +32,7 @@ import { Timeline } from './timeline';
 import { MetadataView } from './metadataView';
 import { AttachmentsTab } from './attachmentsTab';
 import { AnnotationsTab } from './annotationsTab';
+import { AiAssistantTab } from './aiAssistantTab';
 import type { Boundaries } from './geometry';
 import { InspectorTab } from './inspectorTab';
 import { ToolbarButton } from '@web/components/toolbarButton';
@@ -272,6 +273,18 @@ export const Workbench: React.FunctionComponent<{
     };
     tabs.push(annotationsTab);
   }
+
+  // AI Assistant Tab
+  const aiAssistantTab: TabbedPaneTabModel = {
+    id: 'ai-assistant',
+    title: 'AI Assistant',
+    render: () => <AiAssistantTab
+      model={model}
+      selectedAction={selectedAction}
+      rootDir={rootDir}
+    />
+  };
+  tabs.push(aiAssistantTab);
 
   if (showSourcesFirst) {
     const sourceTabIndex = tabs.indexOf(sourceTab);

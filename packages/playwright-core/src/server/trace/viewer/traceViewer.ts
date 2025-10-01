@@ -16,6 +16,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
 
 import { gracefullyProcessExitDoNotHang } from '../../../utils';
 import { isUnderTest } from '../../../utils';
@@ -66,9 +67,155 @@ function validateTraceUrls(traceUrls: string[]) {
 
 export async function startTraceViewerServer(options?: TraceViewerServerOptions): Promise<HttpServer> {
   const server = new HttpServer();
+
+  // Trace viewer routes
   server.routePrefix('/trace', (request, response) => {
     const url = new URL('http://localhost' + request.url!);
     const relativePath = url.pathname.slice('/trace'.length);
+
+    // Claude API proxy endpoint to avoid CORS issues
+    if (relativePath === '/claude-api') {
+      if (request.method !== 'POST') {
+        response.statusCode = 405;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ error: 'Method not allowed' }));
+        return true;
+      }
+
+      // Read request body
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        try {
+          const body = Buffer.concat(chunks).toString();
+          const requestData = JSON.parse(body);
+          const { apiKey, body: claudeBody } = requestData;
+
+          if (!apiKey) {
+            response.statusCode = 400;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ error: 'Missing API key' }));
+            return;
+          }
+
+          // Forward request to Claude API
+          const claudeRequest = https.request({
+            hostname: 'api.anthropic.com',
+            path: '/v1/messages',
+            method: 'POST',
+            headers: {
+              'x-api-key': apiKey,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json',
+            }
+          }, (claudeResponse) => {
+            // Forward response headers and status
+            response.statusCode = claudeResponse.statusCode || 200;
+            response.setHeader('Content-Type', 'application/json');
+
+            // Stream response back to client
+            const responseChunks: Buffer[] = [];
+            claudeResponse.on('data', (chunk: Buffer) => responseChunks.push(chunk));
+            claudeResponse.on('end', () => {
+              response.end(Buffer.concat(responseChunks));
+            });
+          });
+
+          claudeRequest.on('error', (error) => {
+            console.error('Claude API proxy error:', error);
+            response.statusCode = 500;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ error: error.message }));
+          });
+
+          // Send request body to Claude API
+          claudeRequest.write(JSON.stringify(claudeBody));
+          claudeRequest.end();
+        } catch (error: any) {
+          console.error('Claude API proxy parse error:', error);
+          response.statusCode = 500;
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({ error: error.message }));
+        }
+      });
+
+      request.on('error', (error: any) => {
+        console.error('Claude API proxy request error:', error);
+        response.statusCode = 500;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ error: error.message }));
+      });
+
+      return true;
+    }
+
+    // Apply fix endpoint - writes changes to test files
+    if (relativePath === '/apply-fix' && request.method === 'POST') {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        try {
+          const body = Buffer.concat(chunks).toString();
+          const { filePath, oldCode, newCode } = JSON.parse(body);
+
+          if (!filePath || !oldCode || !newCode) {
+            response.statusCode = 400;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ error: 'Missing required fields: filePath, oldCode, newCode' }));
+            return;
+          }
+
+          // Read the file
+          if (!fs.existsSync(filePath)) {
+            response.statusCode = 404;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({ error: `File not found: ${filePath}` }));
+            return;
+          }
+
+          const fileContent = fs.readFileSync(filePath, 'utf-8');
+
+          // Replace oldCode with newCode
+          if (!fileContent.includes(oldCode)) {
+            response.statusCode = 400;
+            response.setHeader('Content-Type', 'application/json');
+            response.end(JSON.stringify({
+              error: 'Old code not found in file',
+              hint: 'The code may have already been modified or the fix proposal is outdated'
+            }));
+            return;
+          }
+
+          const updatedContent = fileContent.replace(oldCode, newCode);
+
+          // Write back to file
+          fs.writeFileSync(filePath, updatedContent, 'utf-8');
+
+          response.statusCode = 200;
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({
+            success: true,
+            filePath,
+            message: 'Fix applied successfully'
+          }));
+        } catch (error: any) {
+          console.error('Apply fix error:', error);
+          response.statusCode = 500;
+          response.setHeader('Content-Type', 'application/json');
+          response.end(JSON.stringify({ error: error.message }));
+        }
+      });
+
+      request.on('error', (error: any) => {
+        console.error('Apply fix request error:', error);
+        response.statusCode = 500;
+        response.setHeader('Content-Type', 'application/json');
+        response.end(JSON.stringify({ error: error.message }));
+      });
+
+      return true;
+    }
+
     if (process.env.PW_HMR) {
       // When running in Vite HMR mode, port is hardcoded in build.js
       response.appendHeader('Access-Control-Allow-Origin', 'http://localhost:44223');
