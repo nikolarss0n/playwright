@@ -36,8 +36,9 @@
 
 .call-section {
   padding-left: 6px;
-  padding-top: 2px;
-  margin-top: 2px;
+  padding-top: 8px;
+  padding-bottom: 4px;
+  margin-top: 8px;
   font-weight: bold;
   text-transform: uppercase;
   font-size: 10px;
@@ -47,6 +48,12 @@
 
 .call-section:not(:first-child) {
   border-top: 1px solid var(--vscode-panel-border);
+  margin-top: 12px;
+}
+
+.call-section + .call-line:last-of-type {
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.2);
 }
 
 .call-line {

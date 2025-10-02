@@ -131,19 +131,21 @@ export const renderAction = (
   else if (!isLive)
     time = '-';
   const { elements, title } = renderTitleForCall(action);
-  return <div className='action-title vbox'>
-    <div className='hbox'>
-      <span className='action-title-method' title={title}>{elements}</span>
-      {(showDuration || showBadges || showAttachments || isSkipped) && <div className='spacer'></div>}
-      {showAttachments && <ToolbarButton icon='attach' title='Open Attachment' onClick={() => revealAttachment(action.attachments![0])} />}
-      {showDuration && !isSkipped && <div className='action-duration'>{time || <span className='codicon codicon-loading'></span>}</div>}
-      {isSkipped && <span className={clsx('action-skipped', 'codicon', testStatusIcon('skipped'))} title='skipped'></span>}
-      {showBadges && <div className='action-icons' onClick={() => revealConsole?.()}>
-        {!!errors && <div className='action-icon'><span className='codicon codicon-error'></span><span className='action-icon-value'>{errors}</span></div>}
-        {!!warnings && <div className='action-icon'><span className='codicon codicon-warning'></span><span className='action-icon-value'>{warnings}</span></div>}
-      </div>}
+  return <div className='action-title hbox'>
+    <div className='vbox' style={{ flex: 'auto' }}>
+      <div className='hbox'>
+        <span className='action-title-method' title={title}>{elements}</span>
+        {(showBadges || showAttachments || isSkipped) && <div className='spacer'></div>}
+        {showAttachments && <ToolbarButton icon='attach' title='Open Attachment' onClick={() => revealAttachment(action.attachments![0])} />}
+        {isSkipped && <span className={clsx('action-skipped', 'codicon', testStatusIcon('skipped'))} title='skipped'></span>}
+        {showBadges && <div className='action-icons' onClick={() => revealConsole?.()}>
+          {!!errors && <div className='action-icon'><span className='codicon codicon-error'></span><span className='action-icon-value'>{errors}</span></div>}
+          {!!warnings && <div className='action-icon'><span className='codicon codicon-warning'></span><span className='action-icon-value'>{warnings}</span></div>}
+        </div>}
+      </div>
+      {locator && <div className='action-title-selector' title={locator}>{locator}</div>}
     </div>
-    {locator && <div className='action-title-selector' title={locator}>{locator}</div>}
+    {showDuration && !isSkipped && <div className='action-duration'>{time || <span className='codicon codicon-loading'></span>}</div>}
   </div>;
 };
 
