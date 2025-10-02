@@ -310,3 +310,105 @@
 .list-view-entry:has(.action-title-method[title*="after"]):hover {
   opacity: 1;
 }
+
+/* Network request items */
+.action-network-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--vscode-tab-inactiveForeground);
+}
+
+.action-network-indicator {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding: 2px 8px;
+  background: rgba(100, 150, 255, 0.15);
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #6495ed;
+  pointer-events: none;
+}
+
+.action-network-indicator .codicon {
+  font-size: 12px;
+}
+
+.action-network-method {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: white;
+}
+
+.action-network-method.method-get {
+  background: #17a2b8;
+}
+
+.action-network-method.method-post {
+  background: #28a745;
+}
+
+.action-network-method.method-put {
+  background: #ffc107;
+  color: #212529;
+}
+
+.action-network-method.method-patch {
+  background: #fd7e14;
+}
+
+.action-network-method.method-delete {
+  background: #dc3545;
+}
+
+.action-network-method.method-head,
+.action-network-method.method-options {
+  background: #6c757d;
+}
+
+.action-network-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-network-status {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10px;
+  color: white;
+}
+
+.action-network-status.status-1xx {
+  background: #6c757d;
+}
+
+.action-network-status.status-2xx {
+  background: #28a745;
+}
+
+.action-network-status.status-3xx {
+  background: #ffc107;
+}
+
+.action-network-status.status-4xx {
+  background: #fd7e14;
+}
+
+.action-network-status.status-5xx {
+  background: #dc3545;
+}

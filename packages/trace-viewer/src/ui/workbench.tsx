@@ -330,6 +330,7 @@ export const Workbench: React.FunctionComponent<{
         revealAttachment={revealAttachment}
         revealConsole={() => selectPropertiesTab('console')}
         isLive={isLive}
+        resources={model?.resources}
       />
       <div className='workbench-actions-status-bar'>
         {!!hiddenActionsCount && <span className='workbench-actions-hidden-count' title={hiddenActionsCount + ' actions hidden by filters'}>{hiddenActionsCount} hidden</span>}

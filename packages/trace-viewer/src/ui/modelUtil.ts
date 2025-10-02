@@ -51,6 +51,7 @@ export type ActionTreeItem = {
   children: ActionTreeItem[];
   parent: ActionTreeItem | undefined;
   action?: ActionTraceEventInContext;
+  networkRequest?: ResourceSnapshot;
 };
 
 export type ErrorDescription = {
@@ -343,7 +344,7 @@ function monotonicTimeDeltaBetweenLibraryAndRunner(nonPrimaryContexts: ContextEn
   return 0;
 }
 
-export function buildActionTree(actions: ActionTraceEventInContext[]): { rootItem: ActionTreeItem, itemMap: Map<string, ActionTreeItem> } {
+export function buildActionTree(actions: ActionTraceEventInContext[], resources?: ResourceSnapshot[]): { rootItem: ActionTreeItem, itemMap: Map<string, ActionTreeItem> } {
   const itemMap = new Map<string, ActionTreeItem>();
 
   for (const action of actions) {
@@ -355,12 +356,50 @@ export function buildActionTree(actions: ActionTraceEventInContext[]): { rootIte
     });
   }
 
+  // Build action hierarchy first
   const rootItem: ActionTreeItem = { id: '', parent: undefined, children: [] };
   for (const item of itemMap.values()) {
-    const parent = item.action!.parentId ? itemMap.get(item.action!.parentId) || rootItem : rootItem;
-    parent.children.push(item);
-    item.parent = parent;
+    if (item.action) {
+      const parent = item.action.parentId ? itemMap.get(item.action.parentId) || rootItem : rootItem;
+      parent.children.push(item);
+      item.parent = parent;
+    }
   }
+
+  // Then associate network requests with actions based on time proximity
+  if (resources) {
+    const actionsList = Array.from(itemMap.values()).filter(item => item.action);
+
+    for (const resource of resources) {
+      if (!resource._monotonicTime) continue;
+
+      // Find the action that was active when this request was made
+      // Look for the last action that started before or at the same time as the request
+      let matchingAction: ActionTreeItem | undefined;
+      for (const actionItem of actionsList) {
+        if (!actionItem.action) continue;
+        if (actionItem.action.startTime <= resource._monotonicTime) {
+          if (!matchingAction || actionItem.action.startTime > matchingAction.action!.startTime) {
+            matchingAction = actionItem;
+          }
+        }
+      }
+
+      if (matchingAction) {
+        // Create a tree item for the network request
+        const networkItemId = `network:${resource.request.url}:${resource._monotonicTime}`;
+        const networkItem: ActionTreeItem = {
+          id: networkItemId,
+          parent: matchingAction,
+          children: [],
+          networkRequest: resource,
+        };
+        matchingAction.children.push(networkItem);
+        itemMap.set(networkItemId, networkItem);
+      }
+    }
+  }
+
   return { rootItem, itemMap };
 }
 

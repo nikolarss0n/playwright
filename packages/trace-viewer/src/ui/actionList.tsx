@@ -40,6 +40,7 @@ export interface ActionListProps {
   revealConsole?: () => void,
   revealAttachment(attachment: AfterActionTraceEventAttachment): void,
   isLive?: boolean,
+  resources?: any[],
 }
 
 const ActionTreeView = TreeView<ActionTreeItem>;
@@ -55,9 +56,10 @@ export const ActionList: React.FC<ActionListProps> = ({
   revealConsole,
   revealAttachment,
   isLive,
+  resources,
 }) => {
   const [treeState, setTreeState] = React.useState<TreeState>({ expandedItems: new Map() });
-  const { rootItem, itemMap } = React.useMemo(() => modelUtil.buildActionTree(actions), [actions]);
+  const { rootItem, itemMap } = React.useMemo(() => modelUtil.buildActionTree(actions, resources), [actions, resources]);
 
   const { selectedItem } = React.useMemo(() => {
     const selectedItem = selectedAction ? itemMap.get(selectedAction.callId) : undefined;
@@ -65,15 +67,58 @@ export const ActionList: React.FC<ActionListProps> = ({
   }, [itemMap, selectedAction]);
 
   const isError = React.useCallback((item: ActionTreeItem) => {
+    if (item.networkRequest) {
+      return item.networkRequest.response.status >= 400;
+    }
     return !!item.action?.error?.message;
   }, []);
 
   const onAccepted = React.useCallback((item: ActionTreeItem) => {
-    return setSelectedTime({ minimum: item.action!.startTime, maximum: item.action!.endTime });
+    if (item.action) {
+      return setSelectedTime({ minimum: item.action.startTime, maximum: item.action.endTime });
+    }
+    if (item.networkRequest && item.networkRequest._monotonicTime) {
+      return setSelectedTime({ minimum: item.networkRequest._monotonicTime, maximum: item.networkRequest._monotonicTime });
+    }
   }, [setSelectedTime]);
 
   const render = React.useCallback((item: ActionTreeItem) => {
-    return renderAction(item.action!, { sdkLanguage, revealConsole, revealAttachment, isLive, showDuration: true, showBadges: true });
+    // Render network request item
+    if (item.networkRequest) {
+      const resource = item.networkRequest;
+      let resourceName: string;
+      try {
+        const url = new URL(resource.request.url);
+        resourceName = url.pathname.substring(url.pathname.lastIndexOf('/') + 1);
+        if (!resourceName)
+          resourceName = url.host;
+      } catch {
+        resourceName = resource.request.url;
+      }
+
+      const status = resource.response.status;
+      let statusClass = '';
+      if (status >= 500) statusClass = 'status-5xx';
+      else if (status >= 400) statusClass = 'status-4xx';
+      else if (status >= 300) statusClass = 'status-3xx';
+      else if (status >= 200) statusClass = 'status-2xx';
+      else if (status >= 100) statusClass = 'status-1xx';
+
+      const method = resource.request.method;
+      const methodClass = `method-${method.toLowerCase()}`;
+
+      return <div className='action-network-item'>
+        <span className={`action-network-method ${methodClass}`}>{method}</span>
+        <span className={`action-network-status ${statusClass}`}>{status > 0 ? status : ''}</span>
+        <span className='action-network-name' title={resource.request.url}>{resourceName}</span>
+      </div>;
+    }
+
+    // Render action item
+    if (!item.action) return null;
+
+    const networkCount = item.children.filter(c => c.networkRequest).length;
+    return renderAction(item.action, { sdkLanguage, revealConsole, revealAttachment, isLive, showDuration: true, showBadges: true, networkCount });
   }, [isLive, revealConsole, revealAttachment, sdkLanguage]);
 
   const isVisible = React.useCallback((item: ActionTreeItem) => {
@@ -81,11 +126,15 @@ export const ActionList: React.FC<ActionListProps> = ({
   }, [selectedTime]);
 
   const onSelectedAction = React.useCallback((item: ActionTreeItem) => {
-    onSelected?.(item.action!);
+    if (item.action) {
+      onSelected?.(item.action);
+    }
   }, [onSelected]);
 
   const onHighlightedAction = React.useCallback((item: ActionTreeItem | undefined) => {
-    onHighlighted?.(item?.action);
+    if (item?.action) {
+      onHighlighted?.(item.action);
+    }
   }, [onHighlighted]);
 
   return <div className='vbox'>
@@ -115,8 +164,9 @@ export const renderAction = (
     isLive?: boolean,
     showDuration?: boolean,
     showBadges?: boolean,
+    networkCount?: number,
   }) => {
-  const { sdkLanguage, revealConsole, revealAttachment, isLive, showDuration, showBadges } = options;
+  const { sdkLanguage, revealConsole, revealAttachment, isLive, showDuration, showBadges, networkCount } = options;
   const { errors, warnings } = modelUtil.stats(action);
   const showAttachments = !!action.attachments?.length && !!revealAttachment;
 
@@ -135,13 +185,14 @@ export const renderAction = (
     <div className='vbox' style={{ flex: 'auto' }}>
       <div className='hbox'>
         <span className='action-title-method' title={title}>{elements}</span>
-        {(showBadges || showAttachments || isSkipped) && <div className='spacer'></div>}
+        {(showBadges || showAttachments || isSkipped || networkCount) && <div className='spacer'></div>}
         {showAttachments && <ToolbarButton icon='attach' title='Open Attachment' onClick={() => revealAttachment(action.attachments![0])} />}
         {isSkipped && <span className={clsx('action-skipped', 'codicon', testStatusIcon('skipped'))} title='skipped'></span>}
         {showBadges && <div className='action-icons' onClick={() => revealConsole?.()}>
           {!!errors && <div className='action-icon'><span className='codicon codicon-error'></span><span className='action-icon-value'>{errors}</span></div>}
           {!!warnings && <div className='action-icon'><span className='codicon codicon-warning'></span><span className='action-icon-value'>{warnings}</span></div>}
         </div>}
+        {!!networkCount && <span className='action-network-indicator'><span className='codicon codicon-globe'></span>{networkCount}</span>}
       </div>
       {locator && <div className='action-title-selector' title={locator}>{locator}</div>}
     </div>
