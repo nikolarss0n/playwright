@@ -410,7 +410,7 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
           output += chalk.yellow('No tests found. Press F8 to refresh.') + '\n';
         } else {
           const panelHint = state.panelFocus === 'tests' ? chalk.cyan('[Tests]') : chalk.cyan('[Actions]');
-          output += `${panelHint} ${chalk.cyan(`${selectedCount}/${totalTests}`)}` + chalk.gray(' │ ') + chalk.green('Enter=Run') + chalk.gray(' │ Tab=Switch │ Space=Toggle │ a=All │ ') + chalk.magenta('?=AI') + '\n';
+          output += `${panelHint} ${chalk.cyan(`${selectedCount}/${totalTests}`)}` + chalk.gray(' │ ') + chalk.green('Enter=Run') + chalk.gray(' │ Tab=Switch │ Space=Toggle │ a=All') + '\n';
         }
       }
     } else {
@@ -427,11 +427,41 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
     }
     output += chalk.gray('─'.repeat(width - 1)) + '\n';
 
-    // Content - reserve lines for menu (2), header (2-3), input (2), status (2)
-    const contentHeight = Math.max(5, height - 10);
+    // Build AI bar lines (run mode only, bottom of screen)
+    const aiBarLines: string[] = [];
+    if (state.mode === 'run') {
+      if (state.aiLoading) {
+        aiBarLines.push(chalk.magenta('🤖 ') + chalk.cyan('Thinking...'));
+      } else if (state.aiResponse) {
+        const responseLines = state.aiResponse.split('\n');
+        const maxResponseLines = Math.min(8, responseLines.length);
+        for (let i = 0; i < maxResponseLines; i++) {
+          const line = responseLines[i].slice(0, width - 6);
+          aiBarLines.push(chalk.magenta('  │ ') + line);
+        }
+        if (responseLines.length > maxResponseLines) {
+          aiBarLines.push(chalk.magenta('  │ ') + chalk.dim(`... ${responseLines.length - maxResponseLines} more lines`));
+        }
+        aiBarLines.push(chalk.magenta('  │ ') + chalk.green('Tab=Apply') + chalk.gray(' │ ') + chalk.yellow('Ctrl+S=Save') + chalk.gray(' │ ') + chalk.gray('Esc=Dismiss'));
+      }
+      if (state.showAiPanel) {
+        aiBarLines.push(chalk.magenta('🤖 > ') + aiInputBuffer + chalk.inverse(' '));
+      } else if (!state.isRunning) {
+        aiBarLines.push(chalk.dim('🤖 ? Ask AI'));
+      }
+    }
+
+    // Content - reserve lines for menu (2), header (2-3), input (2), status (2), AI bar
+    const aiBarHeight = aiBarLines.length;
+    const contentHeight = Math.max(5, height - 10 - aiBarHeight);
     output += renderContent(state, width, contentHeight) + '\n';
 
     output += chalk.gray('─'.repeat(width - 1)) + '\n';
+
+    // AI bar
+    for (const line of aiBarLines) {
+      output += line + '\n';
+    }
 
     // Status bar
     if (state.isRunning && state.progress.testStartTime) {
@@ -924,51 +954,6 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       lines.push('');
     }
 
-    // AI Panel overlay (if visible)
-    if (state.showAiPanel) {
-      const aiLines: string[] = [];
-      const boxWidth = Math.min(contentWidth - 4, 80);
-      const boxLeft = Math.floor((contentWidth - boxWidth) / 2);
-      const padding = ' '.repeat(boxLeft);
-
-      aiLines.push(padding + chalk.bgMagenta.white(' 🤖 AI Assistant ') + chalk.magenta('─'.repeat(boxWidth - 18)));
-      aiLines.push(padding + chalk.magenta('│') + ' ' + chalk.cyan('Ask about the current action, network request, or test') + ' '.repeat(Math.max(0, boxWidth - 57)) + chalk.magenta('│'));
-      aiLines.push(padding + chalk.magenta('├' + '─'.repeat(boxWidth - 2) + '┤'));
-
-      // Input line
-      const inputDisplay = aiInputBuffer + chalk.inverse(' ');
-      aiLines.push(padding + chalk.magenta('│') + ' ' + chalk.yellow('> ') + inputDisplay + ' '.repeat(Math.max(0, boxWidth - aiInputBuffer.length - 6)) + chalk.magenta('│'));
-      aiLines.push(padding + chalk.magenta('├' + '─'.repeat(boxWidth - 2) + '┤'));
-
-      // Response area
-      if (state.aiLoading) {
-        aiLines.push(padding + chalk.magenta('│') + chalk.cyan(' ⏳ Thinking...') + ' '.repeat(boxWidth - 17) + chalk.magenta('│'));
-      } else if (state.aiResponse) {
-        const responseLines = state.aiResponse.split('\n').slice(0, 10);
-        for (const line of responseLines) {
-          const truncated = line.slice(0, boxWidth - 4);
-          aiLines.push(padding + chalk.magenta('│') + ' ' + truncated + ' '.repeat(Math.max(0, boxWidth - truncated.length - 3)) + chalk.magenta('│'));
-        }
-        if (state.aiResponse.split('\n').length > 10) {
-          aiLines.push(padding + chalk.magenta('│') + chalk.dim(' ... (more lines)') + ' '.repeat(boxWidth - 20) + chalk.magenta('│'));
-        }
-      } else {
-        aiLines.push(padding + chalk.magenta('│') + chalk.gray(' Type your question and press Enter') + ' '.repeat(Math.max(0, boxWidth - 38)) + chalk.magenta('│'));
-      }
-
-      aiLines.push(padding + chalk.magenta('├' + '─'.repeat(boxWidth - 2) + '┤'));
-      aiLines.push(padding + chalk.magenta('│') + chalk.gray(' Enter=Send │ ') + chalk.green('Tab=Preview') + chalk.gray(' │ ') + chalk.yellow('Ctrl+S=Save') + chalk.gray(' │ Esc') + ' '.repeat(Math.max(0, boxWidth - 50)) + chalk.magenta('│'));
-      aiLines.push(padding + chalk.magenta('└' + '─'.repeat(boxWidth - 2) + '┘'));
-
-      // Overlay AI panel on top of content
-      const aiStart = Math.floor((maxLines - aiLines.length) / 2);
-      for (let i = 0; i < aiLines.length; i++) {
-        if (aiStart + i >= 0 && aiStart + i < lines.length) {
-          lines[aiStart + i] = aiLines[i];
-        }
-      }
-    }
-
     return lines.slice(0, maxLines).join('\n');
   };
 
@@ -1016,10 +1001,80 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       process.exit(0);
     }
 
-    // AI Panel handling (when visible, intercept all keys)
+    // AI response actions (Tab/Ctrl+S/Esc work when response is showing, even if input not focused)
+    if (state.mode === 'run' && state.aiResponse && !state.showAiPanel && !state.aiLoading) {
+      if (key.name === 'escape') {
+        store.setAiResponse('');
+        return;
+      }
+      if (key.name === 'tab') {
+        const code = extractCodeFromResponse(state.aiResponse);
+        if (code) {
+          const existingCode = state.testCode;
+          const newCode = existingCode
+            ? existingCode + '\n\n// AI Generated:\n' + code
+            : '// AI Generated:\n' + code;
+          store.setTestCode(newCode);
+          store.setAiResponse('');
+          store.setMode('write');
+          store.setActiveTab('test');
+          store.setStatus('Code applied to Test tab');
+        } else {
+          store.setStatus('No code block found in response');
+        }
+        return;
+      }
+      if (key.ctrl && key.name === 's') {
+        const code = extractCodeFromResponse(state.aiResponse);
+        if (!code) {
+          store.setStatus('No code block found in AI response');
+          return;
+        }
+        let selectedFile = '';
+        let selectedTestName = '';
+        let selectedTestLine = 0;
+        let findIdx = 0;
+        for (const file of state.testFiles) {
+          if (findIdx === state.testSelectionIndex) { selectedFile = file.path; break; }
+          findIdx++;
+          for (const test of file.tests) {
+            if (findIdx === state.testSelectionIndex) {
+              selectedFile = file.path; selectedTestName = test.title; selectedTestLine = test.line; break;
+            }
+            findIdx++;
+          }
+          if (selectedFile) break;
+        }
+        if (!selectedFile) { store.setStatus('No test file selected'); return; }
+        const isCompleteTest = code.trim().match(/^test\s*\(/);
+        if (isCompleteTest && selectedTestLine > 0) {
+          const result = replaceTestInFile(selectedFile, selectedTestLine, code);
+          if (result.success) {
+            store.setAiResponse('');
+            store.setStatus(`✓ Test "${selectedTestName}" updated in ${selectedFile}`);
+          } else {
+            store.setStatus(`Error: ${result.error}`);
+          }
+        } else {
+          try {
+            const existingContent = fs.readFileSync(selectedFile, 'utf-8');
+            const wrappedCode = `\ntest('${selectedTestName ? `AI: ${selectedTestName}` : 'AI generated test'}', async ({ page }) => {\n${code.split('\n').map(l => '  ' + l).join('\n')}\n});\n`;
+            fs.writeFileSync(selectedFile, existingContent + wrappedCode);
+            store.setAiResponse('');
+            store.setStatus(`✓ New test added to ${selectedFile}`);
+          } catch (err: any) {
+            store.setStatus(`Error: ${err.message}`);
+          }
+        }
+        return;
+      }
+    }
+
+    // AI input handling (when focused)
     if (state.showAiPanel) {
       if (key.name === 'escape') {
-        store.hideAi();
+        // Unfocus input but keep response visible
+        store.setState({ showAiPanel: false });
         aiInputBuffer = '';
         return;
       }
@@ -1033,10 +1088,11 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
             ? existingCode + '\n\n// AI Generated:\n' + code
             : '// AI Generated:\n' + code;
           store.setTestCode(newCode);
-          store.hideAi();
+          store.setState({ showAiPanel: false });
+          store.setAiResponse('');
           store.setMode('write');
           store.setActiveTab('test');
-          store.setStatus('Code applied to Test tab (press Ctrl+S to save to file)');
+          store.setStatus('Code applied to Test tab');
           aiInputBuffer = '';
         } else {
           store.setStatus('No code block found in response');
@@ -1094,7 +1150,8 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
           // Replace the existing test
           const result = replaceTestInFile(selectedFile, selectedTestLine, code);
           if (result.success) {
-            store.hideAi();
+            store.setState({ showAiPanel: false });
+            store.setAiResponse('');
             aiInputBuffer = '';
             store.setStatus(`✓ Test "${selectedTestName}" updated in ${selectedFile}`);
           } else {
@@ -1114,7 +1171,8 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
 `;
             const newContent = existingContent + '\n' + wrappedCode;
             fs.writeFileSync(selectedFile, newContent);
-            store.hideAi();
+            store.setState({ showAiPanel: false });
+            store.setAiResponse('');
             aiInputBuffer = '';
             store.setStatus(`✓ New test added to ${selectedFile}`);
           } catch (err: any) {
@@ -1128,6 +1186,7 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
         aiInputBuffer = '';
         store.setAiLoading(true);
         store.setAiResponse('');
+        store.setState({ showAiPanel: false }); // Unfocus input while loading
         render();
 
         try {
