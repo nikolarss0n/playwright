@@ -431,7 +431,7 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
     const aiBarLines: string[] = [];
     if (state.mode === 'run') {
       if (state.aiLoading) {
-        aiBarLines.push(chalk.magenta('🤖 ') + chalk.cyan('Thinking...'));
+        aiBarLines.push(chalk.magenta('> ') + chalk.cyan('Thinking...'));
       } else if (state.aiResponse) {
         const responseLines = state.aiResponse.split('\n');
         const maxResponseLines = Math.min(8, responseLines.length);
@@ -446,9 +446,9 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       }
       if (!state.isRunning) {
         if (aiInputBuffer) {
-          aiBarLines.push(chalk.magenta('🤖 > ') + aiInputBuffer + chalk.inverse(' '));
+          aiBarLines.push(chalk.magenta('> ') + aiInputBuffer + chalk.inverse(' '));
         } else {
-          aiBarLines.push(chalk.magenta('🤖 > ') + chalk.dim('Ask AI...') + chalk.inverse(' '));
+          aiBarLines.push(chalk.magenta('> ') + chalk.inverse(' '));
         }
       }
     }
@@ -464,20 +464,19 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
     for (const line of aiBarLines) {
       output += line + '\n';
     }
+    if (aiBarLines.length > 0) {
+      output += chalk.gray('─'.repeat(width - 1)) + '\n';
+    }
 
-    // Status bar
+    // Status bar - only show when running (results already shown in content area)
     if (state.isRunning && state.progress.testStartTime) {
       const elapsed = Date.now() - state.progress.testStartTime;
       const elapsedStr = formatTime(elapsed);
       const statusIcon = chalk.cyan('●');
 
-      // Build detailed status line
       let statusLine = `${statusIcon} ${state.status}`;
-
-      // Add elapsed time
       statusLine += chalk.gray(` │ elapsed: ${elapsedStr}`);
 
-      // Add current action details if available
       if (state.progress.currentAction) {
         const actionElapsed = state.progress.actionStartTime
           ? Date.now() - state.progress.actionStartTime
@@ -488,7 +487,7 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       }
 
       output += statusLine;
-    } else {
+    } else if (state.mode !== 'run') {
       const statusIcon = state.isRunning ? chalk.cyan('●') : chalk.green('○');
       output += `${statusIcon} ${state.status}`;
     }
