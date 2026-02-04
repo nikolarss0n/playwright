@@ -38,9 +38,10 @@ const mouseMove = defineTabTool({
     response.addCode(`// Move mouse to (${params.x}, ${params.y})`);
     response.addCode(`await page.mouse.move(${params.x}, ${params.y});`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await tab.page.mouse.move(params.x, params.y);
     });
+    response.setActionCapture(actionCapture);
   },
 });
 
@@ -65,11 +66,12 @@ const mouseClick = defineTabTool({
     response.addCode(`await page.mouse.down();`);
     response.addCode(`await page.mouse.up();`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await tab.page.mouse.move(params.x, params.y);
       await tab.page.mouse.down();
       await tab.page.mouse.up();
     });
+    response.setActionCapture(actionCapture);
   },
 });
 
@@ -97,12 +99,13 @@ const mouseDrag = defineTabTool({
     response.addCode(`await page.mouse.move(${params.endX}, ${params.endY});`);
     response.addCode(`await page.mouse.up();`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await tab.page.mouse.move(params.startX, params.startY);
       await tab.page.mouse.down();
       await tab.page.mouse.move(params.endX, params.endY);
       await tab.page.mouse.up();
     });
+    response.setActionCapture(actionCapture);
   },
 });
 

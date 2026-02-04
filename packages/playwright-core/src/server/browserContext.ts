@@ -36,6 +36,8 @@ import { RecorderApp } from './recorder/recorderApp';
 import { Selectors } from './selectors';
 import { Tracing } from './trace/recorder/tracing';
 import * as rawStorageSource from '../generated/storageScriptSource';
+import { ActionCaptureListener } from './actionCaptureListener';
+import type { ActionCapture } from './actionCaptureListener';
 
 import type { Artifact } from './artifact';
 import type { Browser, BrowserOptions } from './browser';
@@ -47,7 +49,35 @@ import type { SerializedStorage } from '@injected/storageScript';
 import type * as types from './types';
 import type * as channels from '@protocol/channels';
 
+export type ActionStartInfo = {
+  callId: string;
+  type: string;
+  method: string;
+  title?: string;
+  params: any;
+  startTime: number;
+};
+
 export abstract class BrowserContext extends SdkObject {
+  // Registry of all active contexts for enabling capture retroactively
+  private static _allContexts = new Set<BrowserContext>();
+
+  // Global callback for ActionCapture - set this to receive all action data
+  private static _onActionCapture: ((capture: ActionCapture, context: BrowserContext) => void) | undefined;
+  static get onActionCapture() { return BrowserContext._onActionCapture; }
+  static set onActionCapture(callback: ((capture: ActionCapture, context: BrowserContext) => void) | undefined) {
+    BrowserContext._onActionCapture = callback;
+    // When callback is set, enable capture on all existing contexts
+    if (callback) {
+      for (const ctx of BrowserContext._allContexts) {
+        ctx.enableActionCapture();
+      }
+    }
+  }
+
+  // Global callback for when an action starts (before it completes)
+  static onActionStart: ((info: ActionStartInfo, context: BrowserContext) => void) | undefined;
+
   static Events = {
     Console: 'console',
     Close: 'close',
@@ -95,6 +125,7 @@ export abstract class BrowserContext extends SdkObject {
   _clientCertificatesProxy: ClientCertificatesProxy | undefined;
   private _playwrightBindingExposed = false;
   readonly dialogManager: DialogManager;
+  private _actionCaptureListener?: ActionCaptureListener;
 
   constructor(browser: Browser, options: types.BrowserContextOptions, browserContextId: string | undefined) {
     super(browser, 'browser-context');
@@ -110,6 +141,9 @@ export abstract class BrowserContext extends SdkObject {
     this.tracing = new Tracing(this, browser.options.tracesDir);
     this.clock = new Clock(this);
     this.dialogManager = new DialogManager(this.instrumentation);
+
+    // Register this context for retroactive capture enabling
+    BrowserContext._allContexts.add(this);
   }
 
   isPersistentContext(): boolean {
@@ -150,6 +184,32 @@ export abstract class BrowserContext extends SdkObject {
 
     if (this._options.permissions)
       await this.grantPermissions(this._options.permissions);
+
+    // Auto-attach ActionCaptureListener if global callback is set
+    this._maybeEnableActionCapture();
+  }
+
+  /**
+   * Enable action capture if global callback is set and listener not yet attached.
+   * Can be called multiple times safely - will only attach once.
+   */
+  private _maybeEnableActionCapture() {
+    if (this._actionCaptureListener)
+      return;
+    if (BrowserContext.onActionCapture) {
+      this._actionCaptureListener = new ActionCaptureListener(this, (capture) => {
+        BrowserContext.onActionCapture?.(capture, this);
+      });
+      this._actionCaptureListener.start();
+    }
+  }
+
+  /**
+   * Manually enable action capture on this context.
+   * Useful when onActionCapture callback is set after context creation.
+   */
+  enableActionCapture() {
+    this._maybeEnableActionCapture();
   }
 
   debugger(): Debugger {
@@ -505,6 +565,10 @@ export abstract class BrowserContext extends SdkObject {
         this._closeReason = options.reason;
       this.emit(BrowserContext.Events.BeforeClose);
       this._closedStatus = 'closing';
+
+      // Stop action capture listener and unregister from global registry
+      this._actionCaptureListener?.stop();
+      BrowserContext._allContexts.delete(this);
 
       for (const harRecorder of this._harRecorders.values())
         await harRecorder.flush();

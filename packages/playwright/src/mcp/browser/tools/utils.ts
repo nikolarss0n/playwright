@@ -18,22 +18,46 @@ import { asLocator } from 'playwright-core/lib/utils';
 
 import type * as playwright from 'playwright-core';
 import type { Tab } from '../tab';
+import type { NetworkRequest } from '../actionCapture';
 
-export async function waitForCompletion<R>(tab: Tab, callback: () => Promise<R>): Promise<R> {
-  const requests = new Set<playwright.Request>();
+export type WaitForCompletionResult<R> = {
+  result: R;
+  requests: NetworkRequest[];
+  durationMs: number;
+};
+
+export async function waitForCompletion<R>(tab: Tab, callback: () => Promise<R>): Promise<WaitForCompletionResult<R>> {
+  const pendingRequests = new Set<playwright.Request>();
+  const completedRequests: { request: playwright.Request; startTime: number; endTime: number; status: number | null }[] = [];
   let frameNavigated = false;
   let waitCallback: () => void = () => {};
   const waitBarrier = new Promise<void>(f => { waitCallback = f; });
+  const startMs = performance.now();
 
   const responseListener = (request: playwright.Request) => {
-    requests.delete(request);
-    if (!requests.size)
+    if (pendingRequests.has(request)) {
+      pendingRequests.delete(request);
+      const entry = completedRequests.find(r => r.request === request);
+      if (entry) {
+        entry.endTime = performance.now();
+        void request.response().then(response => {
+          entry.status = response?.status() ?? null;
+        }).catch(() => {});
+      }
+    }
+    if (!pendingRequests.size)
       waitCallback();
   };
 
   const requestListener = (request: playwright.Request) => {
-    requests.add(request);
-    void request.response().then(() => responseListener(request)).catch(() => {});
+    pendingRequests.add(request);
+    completedRequests.push({
+      request,
+      startTime: performance.now(),
+      endTime: performance.now(),
+      status: null,
+    });
+    void request.response().then(() => responseListener(request)).catch(() => responseListener(request));
   };
 
   const frameNavigateListener = (frame: playwright.Frame) => {
@@ -64,11 +88,24 @@ export async function waitForCompletion<R>(tab: Tab, callback: () => Promise<R>)
 
   try {
     const result = await callback();
-    if (!requests.size && !frameNavigated)
+    if (!pendingRequests.size && !frameNavigated)
       waitCallback();
     await waitBarrier;
     await tab.waitForTimeout(1000);
-    return result;
+
+    const endMs = performance.now();
+    const requests: NetworkRequest[] = completedRequests.map(r => ({
+      method: r.request.method(),
+      url: r.request.url(),
+      status: r.status,
+      durationMs: Math.round(r.endTime - r.startTime),
+    }));
+
+    return {
+      result,
+      requests,
+      durationMs: Math.round(endMs - startMs),
+    };
   } finally {
     dispose();
   }

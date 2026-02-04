@@ -51,9 +51,10 @@ const resize = defineTabTool({
   handle: async (tab, params, response) => {
     response.addCode(`await page.setViewportSize({ width: ${params.width}, height: ${params.height} });`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await tab.page.setViewportSize({ width: params.width, height: params.height });
     });
+    response.setActionCapture(actionCapture);
   },
 });
 

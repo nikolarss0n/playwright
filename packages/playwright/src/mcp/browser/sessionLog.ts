@@ -25,6 +25,7 @@ import type { FullConfig } from './config';
 import type * as actions from './actions';
 import type { Tab, TabSnapshot } from './tab';
 import type * as mcpServer from '../sdk/server';
+import type { ActionCapture } from './actionCapture';
 
 type LogEntry = {
   timestamp: number;
@@ -37,6 +38,7 @@ type LogEntry = {
   userAction?: actions.Action;
   code: string;
   tabSnapshot?: TabSnapshot;
+  actionCapture?: ActionCapture;
 };
 
 export class SessionLog {
@@ -71,6 +73,7 @@ export class SessionLog {
       },
       code: response.code(),
       tabSnapshot: response.tabSnapshot(),
+      actionCapture: response.actionCapture(),
     };
     this._appendEntry(entry);
   }
@@ -167,6 +170,31 @@ export class SessionLog {
         const fileName = `${ordinal}.snapshot.yml`;
         fs.promises.writeFile(path.join(this._folder, fileName), entry.tabSnapshot.ariaSnapshot).catch(logUnhandledError);
         lines.push(`- Snapshot: ${fileName}`);
+      }
+
+      if (entry.actionCapture) {
+        const actionFileName = `${ordinal}.action.json`;
+        const actionData = {
+          timing: entry.actionCapture.timing,
+          network: entry.actionCapture.network,
+          snapshot: {
+            diff: entry.actionCapture.snapshot.diff,
+          },
+          console: entry.actionCapture.console.map(c => ({ type: c.type, text: c.text })),
+        };
+        fs.promises.writeFile(path.join(this._folder, actionFileName), JSON.stringify(actionData, null, 2)).catch(logUnhandledError);
+
+        // Add action capture summary to markdown
+        if (entry.actionCapture.timing.durationMs > 0)
+          lines.push(`- Duration: ${entry.actionCapture.timing.durationMs}ms`);
+        if (entry.actionCapture.network.requests.length > 0)
+          lines.push(`- Network: ${entry.actionCapture.network.summary}`);
+        if (entry.actionCapture.snapshot.diff) {
+          const diff = entry.actionCapture.snapshot.diff;
+          if (diff.added.length > 0 || diff.removed.length > 0 || diff.changed.length > 0)
+            lines.push(`- Page changes: ${diff.summary}`);
+        }
+        lines.push(`- Action capture: ${actionFileName}`);
       }
 
       lines.push('', '');

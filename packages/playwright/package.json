@@ -57,7 +57,8 @@
     }
   },
   "bin": {
-    "playwright": "cli.js"
+    "playwright": "cli.js",
+    "pw-capture": "cli-capture.js"
   },
   "author": {
     "name": "Microsoft Corporation"

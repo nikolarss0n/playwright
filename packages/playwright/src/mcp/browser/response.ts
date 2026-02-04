@@ -16,10 +16,13 @@
 
 import { debug } from 'playwright-core/lib/utilsBundle';
 import { renderModalStates } from './tab';
+import { renderActionCapture } from './actionCapture';
+import { computeSnapshotDiff } from './snapshotDiff';
 
 import type { Tab, TabSnapshot } from './tab';
 import type { ImageContent, TextContent } from '@modelcontextprotocol/sdk/types.js';
 import type { Context } from './context';
+import type { ActionCapture } from './actionCapture';
 
 export const requestDebug = debug('pw:mcp:request');
 
@@ -31,6 +34,7 @@ export class Response {
   private _includeSnapshot = false;
   private _includeTabs = false;
   private _tabSnapshot: TabSnapshot | undefined;
+  private _actionCapture: ActionCapture | undefined;
 
   readonly toolName: string;
   readonly toolArgs: Record<string, any>;
@@ -83,11 +87,27 @@ export class Response {
     this._includeTabs = true;
   }
 
+  setActionCapture(capture: ActionCapture) {
+    this._actionCapture = capture;
+  }
+
+  actionCapture(): ActionCapture | undefined {
+    return this._actionCapture;
+  }
+
   async finish() {
     // All the async snapshotting post-action is happening here.
     // Everything below should race against modal states.
     if (this._includeSnapshot && this._context.currentTab())
       this._tabSnapshot = await this._context.currentTabOrDie().captureSnapshot();
+
+    // Compute snapshot diff if we have action capture with before snapshot
+    if (this._actionCapture && this._tabSnapshot) {
+      this._actionCapture.snapshot.after = this._tabSnapshot.ariaSnapshot;
+      if (this._actionCapture.snapshot.before && this._actionCapture.snapshot.after)
+        this._actionCapture.snapshot.diff = computeSnapshotDiff(this._actionCapture.snapshot.before, this._actionCapture.snapshot.after);
+    }
+
     for (const tab of this._context.tabs())
       await tab.updateTitle();
   }
@@ -124,6 +144,10 @@ ${this._code.join('\n')}
 \`\`\``);
       response.push('');
     }
+
+    // Render action capture (timing, network, page changes)
+    if (this._actionCapture)
+      response.push(...renderActionCapture(this._actionCapture));
 
     // List browser tabs.
     if (this._includeSnapshot || this._includeTabs)

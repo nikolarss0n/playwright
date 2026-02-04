@@ -1,6 +1,7 @@
 // Simple state store (no external dependencies)
-export type TabId = 'steps' | 'pom' | 'business' | 'test' | 'network' | 'console';
+export type TabId = 'steps' | 'pom' | 'business' | 'test' | 'network' | 'console' | 'tests';
 export type ModelId = 'haiku' | 'opus';
+export type AppMode = 'write' | 'run';
 
 export interface Step {
   id: number;
@@ -13,6 +14,7 @@ export interface NetworkRequest {
   method: string;
   url: string;
   status?: number;
+  durationMs?: number;
 }
 
 export interface ConsoleMessage {
@@ -20,10 +22,77 @@ export interface ConsoleMessage {
   text: string;
 }
 
+// Action capture from test runs
+export interface NetworkRequestCapture {
+  method: string;
+  url: string;
+  status: number | null;
+  statusText?: string;
+  durationMs: number;
+  resourceType?: string;
+  responseHeaders?: Record<string, string>;
+  responseBody?: string;
+  requestPostData?: string;
+}
+
+export interface ActionCapture {
+  type: string;
+  method: string;
+  title?: string;
+  timing: { durationMs: number };
+  network: {
+    requests: NetworkRequestCapture[];
+    summary: string;
+  };
+  snapshot: {
+    diff?: { added: string[]; removed: string[]; changed: string[]; summary: string };
+  };
+  console: Array<{ type: string; text: string }>;
+  error?: { message: string };
+}
+
+// Test file discovery
+export interface TestFile {
+  path: string;
+  relativePath: string;
+  tests: TestCase[];
+}
+
+export interface TestCase {
+  title: string;
+  line: number;
+  fullTitle: string;
+}
+
+export interface TestResult {
+  file: string;
+  test: string;
+  testKey: string;  // file:line key for matching
+  status: 'passed' | 'failed' | 'skipped' | 'running';
+  duration: number;
+  actions: ActionCapture[];
+  error?: string;
+}
+
+export type PanelFocus = 'tests' | 'actions';
+export type ActionDetailFocus = 'actions' | 'network' | 'console';
+
+// Progress tracking for live status updates
+export interface ProgressState {
+  currentAction: string | null;       // Action being executed (e.g., "click button")
+  actionStartTime: number | null;     // When current action started
+  testStartTime: number | null;       // When current test started
+  testTimeoutMs: number;              // Test timeout in ms (default 120000)
+  waitingFor: string | null;          // What we're waiting for (e.g., "navigation", "element")
+  actionProgress: number;             // 0-100 progress within action (for long operations)
+}
+
 export interface AppState {
+  mode: AppMode;
   activeTab: TabId;
   selectedModel: ModelId;
   isRunning: boolean;
+  stopRequested: boolean;  // Flag to stop running tests
   status: string;
   task: string;
   baseURL: string;
@@ -34,15 +103,39 @@ export interface AppState {
   testCode: string;
   networkRequests: NetworkRequest[];
   consoleMessages: ConsoleMessage[];
+  // Test runner state
+  testFiles: TestFile[];
+  selectedTests: Record<string, boolean>;  // Use object instead of Set for proper state updates
+  testResults: TestResult[];
+  currentTestActions: ActionCapture[];
+  testSelectionIndex: number;  // Track selection index in store
+  // Progress tracking
+  progress: ProgressState;
+  // Split-pane state for actions panel
+  panelFocus: PanelFocus;       // Which panel has focus
+  actionScrollIndex: number;    // Selected action in actions panel
+  expandedActionIndex: number;  // Expanded action (-1 for none)
+  // Network detail drill-down
+  actionDetailFocus: ActionDetailFocus;  // What's focused within expanded action
+  networkScrollIndex: number;   // Selected network request within action
+  expandedNetworkIndex: number; // Expanded network request (-1 for none)
+  responseScrollOffset: number; // Scroll offset for expanded response body
+  // AI assistant
+  aiPrompt: string;             // Current AI prompt input
+  aiResponse: string;           // AI response/suggestion
+  aiLoading: boolean;           // Whether AI is processing
+  showAiPanel: boolean;         // Whether AI panel is visible
 }
 
 type Listener = () => void;
 
 class Store {
   private state: AppState = {
+    mode: 'write',
     activeTab: 'steps',
     selectedModel: 'haiku',
     isRunning: false,
+    stopRequested: false,
     status: 'Ready',
     task: '',
     baseURL: '',
@@ -53,6 +146,35 @@ class Store {
     testCode: '',
     networkRequests: [],
     consoleMessages: [],
+    // Test runner state
+    testFiles: [],
+    selectedTests: {},
+    testResults: [],
+    currentTestActions: [],
+    testSelectionIndex: 0,
+    // Progress tracking
+    progress: {
+      currentAction: null,
+      actionStartTime: null,
+      testStartTime: null,
+      testTimeoutMs: 120000,  // 2 minutes default
+      waitingFor: null,
+      actionProgress: 0,
+    },
+    // Split-pane state
+    panelFocus: 'tests',
+    actionScrollIndex: 0,
+    expandedActionIndex: -1,
+    // Network detail state
+    actionDetailFocus: 'actions',
+    networkScrollIndex: 0,
+    expandedNetworkIndex: -1,
+    responseScrollOffset: 0,
+    // AI assistant
+    aiPrompt: '',
+    aiResponse: '',
+    aiLoading: false,
+    showAiPanel: false,
   };
 
   private listeners: Set<Listener> = new Set();
@@ -85,7 +207,15 @@ class Store {
   }
 
   setIsRunning(running: boolean) {
-    this.setState({ isRunning: running });
+    this.setState({ isRunning: running, stopRequested: false });
+  }
+
+  requestStop() {
+    this.setState({ stopRequested: true });
+  }
+
+  isStopRequested(): boolean {
+    return this.state.stopRequested;
   }
 
   setStatus(status: string) {
@@ -175,7 +305,285 @@ class Store {
       testCode: '',
       networkRequests: [],
       consoleMessages: [],
+      testResults: [],
+      currentTestActions: [],
     });
+  }
+
+  // Mode switching
+  setMode(mode: AppMode) {
+    this.setState({
+      mode,
+      activeTab: mode === 'run' ? 'tests' : 'steps',
+    });
+  }
+
+  // Test runner actions
+  setTestFiles(testFiles: TestFile[]) {
+    this.setState({ testFiles });
+  }
+
+  toggleTestSelection(testKey: string) {
+    const selectedTests = { ...this.state.selectedTests };
+    if (selectedTests[testKey]) {
+      delete selectedTests[testKey];
+    } else {
+      selectedTests[testKey] = true;
+    }
+    this.setState({ selectedTests });
+  }
+
+  selectAllTests() {
+    const selectedTests: Record<string, boolean> = {};
+    for (const file of this.state.testFiles) {
+      for (const test of file.tests) {
+        selectedTests[`${file.path}:${test.line}`] = true;
+      }
+    }
+    this.setState({ selectedTests });
+  }
+
+  clearTestSelection() {
+    this.setState({ selectedTests: {} });
+  }
+
+  setTestSelectionIndex(index: number) {
+    this.setState({ testSelectionIndex: index });
+  }
+
+  getSelectedTestCount(): number {
+    return Object.keys(this.state.selectedTests).length;
+  }
+
+  isTestSelected(key: string): boolean {
+    return !!this.state.selectedTests[key];
+  }
+
+  addTestResult(result: TestResult) {
+    // Update existing or add new
+    const existingIndex = this.state.testResults.findIndex(r => r.testKey === result.testKey);
+    if (existingIndex >= 0) {
+      const testResults = [...this.state.testResults];
+      testResults[existingIndex] = result;
+      this.setState({ testResults });
+    } else {
+      const testResults = [...this.state.testResults, result];
+      this.setState({ testResults });
+    }
+  }
+
+  getTestResult(testKey: string): TestResult | undefined {
+    return this.state.testResults.find(r => r.testKey === testKey);
+  }
+
+  setTestRunning(testKey: string, file: string, test: string) {
+    this.addTestResult({
+      file,
+      test,
+      testKey,
+      status: 'running',
+      duration: 0,
+      actions: [],
+    });
+  }
+
+  addActionCapture(capture: ActionCapture) {
+    const currentTestActions = [...this.state.currentTestActions, capture];
+
+    // Also update the running test result's actions so the UI can display them live
+    const testResults = [...this.state.testResults];
+    const runningIdx = testResults.findIndex(r => r.status === 'running');
+    if (runningIdx >= 0) {
+      testResults[runningIdx] = {
+        ...testResults[runningIdx],
+        actions: currentTestActions,
+      };
+    }
+
+    this.setState({ currentTestActions, testResults });
+
+    // Also add to network requests and console for display in those tabs
+    for (const req of capture.network.requests) {
+      this.addNetworkRequest({
+        method: req.method,
+        url: req.url,
+        status: req.status ?? undefined,
+        durationMs: req.durationMs,
+      });
+    }
+    for (const msg of capture.console) {
+      this.addConsoleMessage({
+        type: msg.type as ConsoleMessage['type'],
+        text: msg.text,
+      });
+    }
+  }
+
+  clearCurrentTestActions() {
+    this.setState({ currentTestActions: [] });
+  }
+
+  resetTestRunner() {
+    this.setState({
+      testResults: [],
+      currentTestActions: [],
+      networkRequests: [],
+      consoleMessages: [],
+      steps: [],
+      actionScrollIndex: 0,
+      expandedActionIndex: -1,
+    });
+  }
+
+  // Split-pane actions
+  setPanelFocus(focus: PanelFocus) {
+    this.setState({ panelFocus: focus });
+  }
+
+  setActionScrollIndex(index: number) {
+    this.setState({ actionScrollIndex: index });
+  }
+
+  toggleExpandedAction(index: number) {
+    const current = this.state.expandedActionIndex;
+    this.setState({ expandedActionIndex: current === index ? -1 : index });
+  }
+
+  setExpandedActionIndex(index: number) {
+    this.setState({ expandedActionIndex: index });
+  }
+
+  // Network detail actions
+  setActionDetailFocus(focus: ActionDetailFocus) {
+    this.setState({ actionDetailFocus: focus });
+  }
+
+  setNetworkScrollIndex(index: number) {
+    this.setState({ networkScrollIndex: index });
+  }
+
+  toggleExpandedNetwork(index: number) {
+    const current = this.state.expandedNetworkIndex;
+    this.setState({ expandedNetworkIndex: current === index ? -1 : index, responseScrollOffset: 0 });
+  }
+
+  setExpandedNetworkIndex(index: number) {
+    this.setState({ expandedNetworkIndex: index, responseScrollOffset: 0 });
+  }
+
+  setResponseScrollOffset(offset: number) {
+    this.setState({ responseScrollOffset: Math.max(0, offset) });
+  }
+
+  // Reset network detail state when changing actions
+  resetNetworkDetail() {
+    this.setState({
+      actionDetailFocus: 'actions',
+      networkScrollIndex: 0,
+      expandedNetworkIndex: -1,
+      responseScrollOffset: 0,
+    });
+  }
+
+  // AI assistant actions
+  setAiPrompt(prompt: string) {
+    this.setState({ aiPrompt: prompt });
+  }
+
+  setAiResponse(response: string) {
+    this.setState({ aiResponse: response });
+  }
+
+  setAiLoading(loading: boolean) {
+    this.setState({ aiLoading: loading });
+  }
+
+  toggleAiPanel() {
+    this.setState({ showAiPanel: !this.state.showAiPanel });
+  }
+
+  showAi() {
+    this.setState({ showAiPanel: true, aiPrompt: '', aiResponse: '' });
+  }
+
+  hideAi() {
+    this.setState({ showAiPanel: false });
+  }
+
+  // Progress tracking actions
+  setCurrentAction(action: string | null) {
+    this.setState({
+      progress: {
+        ...this.state.progress,
+        currentAction: action,
+        actionStartTime: action ? Date.now() : null,
+        waitingFor: null,
+        actionProgress: 0,
+      },
+    });
+  }
+
+  setWaitingFor(waiting: string | null) {
+    this.setState({
+      progress: {
+        ...this.state.progress,
+        waitingFor: waiting,
+      },
+    });
+  }
+
+  setActionProgress(percent: number) {
+    this.setState({
+      progress: {
+        ...this.state.progress,
+        actionProgress: Math.min(100, Math.max(0, percent)),
+      },
+    });
+  }
+
+  startTestTimer() {
+    this.setState({
+      progress: {
+        ...this.state.progress,
+        testStartTime: Date.now(),
+        currentAction: null,
+        actionStartTime: null,
+        waitingFor: null,
+        actionProgress: 0,
+      },
+    });
+  }
+
+  clearTestTimer() {
+    this.setState({
+      progress: {
+        ...this.state.progress,
+        testStartTime: null,
+        currentAction: null,
+        actionStartTime: null,
+        waitingFor: null,
+        actionProgress: 0,
+      },
+    });
+  }
+
+  getElapsedTestTime(): number {
+    const { testStartTime } = this.state.progress;
+    if (!testStartTime) return 0;
+    return Date.now() - testStartTime;
+  }
+
+  getRemainingTestTime(): number {
+    const { testStartTime, testTimeoutMs } = this.state.progress;
+    if (!testStartTime) return testTimeoutMs;
+    const elapsed = Date.now() - testStartTime;
+    return Math.max(0, testTimeoutMs - elapsed);
+  }
+
+  getElapsedActionTime(): number {
+    const { actionStartTime } = this.state.progress;
+    if (!actionStartTime) return 0;
+    return Date.now() - actionStartTime;
   }
 }
 

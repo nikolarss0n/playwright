@@ -23,8 +23,10 @@ import { logUnhandledError } from '../log';
 import { ModalState } from './tools/tool';
 import { handleDialog } from './tools/dialogs';
 import { uploadFile } from './tools/files';
+import { createEmptyActionCapture, formatNetworkSummary } from './actionCapture';
 
 import type { Context } from './context';
+import type { ActionCapture } from './actionCapture';
 
 type PageEx = playwright.Page & {
   _snapshotForAI: () => Promise<string>;
@@ -268,8 +270,34 @@ export class Tab extends EventEmitter<TabEventsInterface> {
     ]);
   }
 
-  async waitForCompletion(callback: () => Promise<void>) {
-    await this._raceAgainstModalStates(() => waitForCompletion(this, callback));
+  async waitForCompletion(callback: () => Promise<void>): Promise<ActionCapture> {
+    // Capture state before action
+    const consoleCountBefore = this._recentConsoleMessages.length;
+    let snapshotBefore: string | undefined;
+    try {
+      snapshotBefore = await (this.page as PageEx)._snapshotForAI();
+    } catch {
+      // Snapshot may fail if page is navigating
+    }
+
+    const actionCapture = createEmptyActionCapture();
+    actionCapture.snapshot.before = snapshotBefore;
+
+    await this._raceAgainstModalStates(async () => {
+      const { requests, durationMs } = await waitForCompletion(this, callback);
+
+      // Build timing info
+      actionCapture.timing.durationMs = durationMs;
+
+      // Build network info
+      actionCapture.network.requests = requests;
+      actionCapture.network.summary = formatNetworkSummary(requests);
+    });
+
+    // Capture console messages that occurred during action
+    actionCapture.console = this._recentConsoleMessages.slice(consoleCountBefore);
+
+    return actionCapture;
   }
 
   async refLocator(params: { element: string, ref: string }): Promise<playwright.Locator> {

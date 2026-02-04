@@ -72,12 +72,13 @@ const click = defineTabTool({
     else
       response.addCode(`await page.${await generateLocator(locator)}.click(${optionsAttr});`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       if (params.doubleClick)
         await locator.dblclick(options);
       else
         await locator.click(options);
     });
+    response.setActionCapture(actionCapture);
   },
 });
 
@@ -104,9 +105,10 @@ const drag = defineTabTool({
       { ref: params.endRef, element: params.endElement },
     ]);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await startLocator.dragTo(endLocator);
     });
+    response.setActionCapture(actionCapture);
 
     response.addCode(`await page.${await generateLocator(startLocator)}.dragTo(page.${await generateLocator(endLocator)});`);
   },
@@ -128,9 +130,10 @@ const hover = defineTabTool({
     const locator = await tab.refLocator(params);
     response.addCode(`await page.${await generateLocator(locator)}.hover();`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await locator.hover();
     });
+    response.setActionCapture(actionCapture);
   },
 });
 
@@ -154,9 +157,10 @@ const selectOption = defineTabTool({
     const locator = await tab.refLocator(params);
     response.addCode(`await page.${await generateLocator(locator)}.selectOption(${javascript.formatObject(params.values)});`);
 
-    await tab.waitForCompletion(async () => {
+    const actionCapture = await tab.waitForCompletion(async () => {
       await locator.selectOption(params.values);
     });
+    response.setActionCapture(actionCapture);
   },
 });
 
