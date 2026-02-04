@@ -410,7 +410,7 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
           output += chalk.yellow('No tests found. Press F8 to refresh.') + '\n';
         } else {
           const panelHint = state.panelFocus === 'tests' ? chalk.cyan('[Tests]') : chalk.cyan('[Actions]');
-          output += `${panelHint} ${chalk.cyan(`${selectedCount}/${totalTests}`)}` + chalk.gray(' │ ') + chalk.green('Enter=Run') + chalk.gray(' │ Tab=Switch │ Space=Toggle │ a=All') + '\n';
+          output += `${panelHint} ${chalk.cyan(`${selectedCount}/${totalTests}`)}` + chalk.gray(' │ ') + chalk.green('Enter=Run') + chalk.gray(' │ Tab=Switch │ Space=Toggle │ ^A=All') + '\n';
         }
       }
     } else {
@@ -444,10 +444,12 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
         }
         aiBarLines.push(chalk.magenta('  │ ') + chalk.green('Tab=Apply') + chalk.gray(' │ ') + chalk.yellow('Ctrl+S=Save') + chalk.gray(' │ ') + chalk.gray('Esc=Dismiss'));
       }
-      if (state.showAiPanel) {
-        aiBarLines.push(chalk.magenta('🤖 > ') + aiInputBuffer + chalk.inverse(' '));
-      } else if (!state.isRunning) {
-        aiBarLines.push(chalk.dim('🤖 ? Ask AI'));
+      if (!state.isRunning) {
+        if (aiInputBuffer) {
+          aiBarLines.push(chalk.magenta('🤖 > ') + aiInputBuffer + chalk.inverse(' '));
+        } else {
+          aiBarLines.push(chalk.magenta('🤖 > ') + chalk.dim('Ask AI...') + chalk.inverse(' '));
+        }
       }
     }
 
@@ -1001,12 +1003,8 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       process.exit(0);
     }
 
-    // AI response actions (Tab/Ctrl+S/Esc work when response is showing, even if input not focused)
-    if (state.mode === 'run' && state.aiResponse && !state.showAiPanel && !state.aiLoading) {
-      if (key.name === 'escape') {
-        store.setAiResponse('');
-        return;
-      }
+    // AI response actions (Tab=Apply, Ctrl+S=Save when response is showing)
+    if (state.mode === 'run' && state.aiResponse && !state.aiLoading) {
       if (key.name === 'tab') {
         const code = extractCodeFromResponse(state.aiResponse);
         if (code) {
@@ -1026,14 +1024,8 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
       }
       if (key.ctrl && key.name === 's') {
         const code = extractCodeFromResponse(state.aiResponse);
-        if (!code) {
-          store.setStatus('No code block found in AI response');
-          return;
-        }
-        let selectedFile = '';
-        let selectedTestName = '';
-        let selectedTestLine = 0;
-        let findIdx = 0;
+        if (!code) { store.setStatus('No code block found in AI response'); return; }
+        let selectedFile = '', selectedTestName = '', selectedTestLine = 0, findIdx = 0;
         for (const file of state.testFiles) {
           if (findIdx === state.testSelectionIndex) { selectedFile = file.path; break; }
           findIdx++;
@@ -1050,174 +1042,20 @@ export function startUI(onSubmit: (task: string, model: string, baseURL: string)
         if (isCompleteTest && selectedTestLine > 0) {
           const result = replaceTestInFile(selectedFile, selectedTestLine, code);
           if (result.success) {
-            store.setAiResponse('');
+            store.setAiResponse(''); aiInputBuffer = '';
             store.setStatus(`✓ Test "${selectedTestName}" updated in ${selectedFile}`);
-          } else {
-            store.setStatus(`Error: ${result.error}`);
-          }
+          } else { store.setStatus(`Error: ${result.error}`); }
         } else {
           try {
             const existingContent = fs.readFileSync(selectedFile, 'utf-8');
             const wrappedCode = `\ntest('${selectedTestName ? `AI: ${selectedTestName}` : 'AI generated test'}', async ({ page }) => {\n${code.split('\n').map(l => '  ' + l).join('\n')}\n});\n`;
             fs.writeFileSync(selectedFile, existingContent + wrappedCode);
-            store.setAiResponse('');
+            store.setAiResponse(''); aiInputBuffer = '';
             store.setStatus(`✓ New test added to ${selectedFile}`);
-          } catch (err: any) {
-            store.setStatus(`Error: ${err.message}`);
-          }
+          } catch (err: any) { store.setStatus(`Error: ${err.message}`); }
         }
         return;
       }
-    }
-
-    // AI input handling (when focused)
-    if (state.showAiPanel) {
-      if (key.name === 'escape') {
-        // Unfocus input but keep response visible
-        store.setState({ showAiPanel: false });
-        aiInputBuffer = '';
-        return;
-      }
-      // Tab to apply code and switch to test tab
-      if (key.name === 'tab' && state.aiResponse) {
-        const code = extractCodeFromResponse(state.aiResponse);
-        if (code) {
-          // Append to existing test code or set new
-          const existingCode = state.testCode;
-          const newCode = existingCode
-            ? existingCode + '\n\n// AI Generated:\n' + code
-            : '// AI Generated:\n' + code;
-          store.setTestCode(newCode);
-          store.setState({ showAiPanel: false });
-          store.setAiResponse('');
-          store.setMode('write');
-          store.setActiveTab('test');
-          store.setStatus('Code applied to Test tab');
-          aiInputBuffer = '';
-        } else {
-          store.setStatus('No code block found in response');
-        }
-        return;
-      }
-      // Ctrl+S to save code directly to the selected test file
-      if (key.ctrl && key.name === 's') {
-        if (!state.aiResponse) {
-          store.setStatus('No AI response to save');
-          return;
-        }
-
-        const code = extractCodeFromResponse(state.aiResponse);
-        if (!code) {
-          store.setStatus('No code block found in AI response');
-          return;
-        }
-
-        // Find the selected test file and line based on testSelectionIndex
-        let selectedFile = '';
-        let selectedTestName = '';
-        let selectedTestLine = 0;
-        let findIdx = 0;
-
-        for (const file of state.testFiles) {
-          // File header row
-          if (findIdx === state.testSelectionIndex) {
-            selectedFile = file.path;
-            break;
-          }
-          findIdx++;
-
-          for (const test of file.tests) {
-            if (findIdx === state.testSelectionIndex) {
-              selectedFile = file.path;
-              selectedTestName = test.title;
-              selectedTestLine = test.line;
-              break;
-            }
-            findIdx++;
-          }
-          if (selectedFile) break;
-        }
-
-        if (!selectedFile) {
-          store.setStatus(`No file found for selection index ${state.testSelectionIndex}`);
-          return;
-        }
-
-        // Check if the code is a complete test (starts with test()
-        const isCompleteTest = code.trim().match(/^test\s*\(/);
-
-        if (isCompleteTest && selectedTestLine > 0) {
-          // Replace the existing test
-          const result = replaceTestInFile(selectedFile, selectedTestLine, code);
-          if (result.success) {
-            store.setState({ showAiPanel: false });
-            store.setAiResponse('');
-            aiInputBuffer = '';
-            store.setStatus(`✓ Test "${selectedTestName}" updated in ${selectedFile}`);
-          } else {
-            store.setStatus(`Error: ${result.error}`);
-          }
-        } else {
-          // Append as new test (old behavior)
-          try {
-            const existingContent = fs.readFileSync(selectedFile, 'utf-8');
-            const testName = selectedTestName
-              ? `AI: ${selectedTestName} - assertion`
-              : 'AI generated test';
-            const wrappedCode = `
-test('${testName}', async ({ page }) => {
-${code.split('\n').map(line => '  ' + line).join('\n')}
-});
-`;
-            const newContent = existingContent + '\n' + wrappedCode;
-            fs.writeFileSync(selectedFile, newContent);
-            store.setState({ showAiPanel: false });
-            store.setAiResponse('');
-            aiInputBuffer = '';
-            store.setStatus(`✓ New test added to ${selectedFile}`);
-          } catch (err: any) {
-            store.setStatus(`Error: ${err.message}`);
-          }
-        }
-        return;
-      }
-      if (key.name === 'return' && aiInputBuffer.trim()) {
-        const prompt = aiInputBuffer.trim();
-        aiInputBuffer = '';
-        store.setAiLoading(true);
-        store.setAiResponse('');
-        store.setState({ showAiPanel: false }); // Unfocus input while loading
-        render();
-
-        try {
-          const context = getCurrentAiContext();
-          const response = await getAiSuggestion(prompt, context);
-          store.setAiResponse(response);
-        } catch (error: any) {
-          store.setAiResponse(`Error: ${error.message}`);
-        } finally {
-          store.setAiLoading(false);
-        }
-        return;
-      }
-      if (key.name === 'backspace') {
-        aiInputBuffer = aiInputBuffer.slice(0, -1);
-        render();
-        return;
-      }
-      if (str && !key.ctrl && !key.meta) {
-        aiInputBuffer += str;
-        render();
-        return;
-      }
-      return;
-    }
-
-    // Open AI panel with '?' in run mode
-    if (str === '?' && state.mode === 'run' && !state.isRunning) {
-      store.showAi();
-      aiInputBuffer = '';
-      return;
     }
 
     // Tab switching with F1-F6 (works anytime)
@@ -1284,13 +1122,23 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
       return;
     }
 
-    // Quit with Escape (or cancel baseURL input, or stop running tests)
+    // Quit with Escape (or clear AI input/response, cancel baseURL, stop tests)
     if (key.name === 'escape') {
       if (state.isRunning) {
-        // Stop running tests
         store.requestStop();
         killCurrentTest();
         store.setStatus('Stopping...');
+        return;
+      }
+      // Clear AI input buffer first
+      if (aiInputBuffer.length > 0) {
+        aiInputBuffer = '';
+        render();
+        return;
+      }
+      // Clear AI response next
+      if (state.aiResponse) {
+        store.setAiResponse('');
         return;
       }
       if (inputMode === 'baseURL') {
@@ -1305,6 +1153,39 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
 
     // Run mode controls
     if (state.mode === 'run' && !state.isRunning) {
+      // AI input: Enter sends prompt when buffer has text
+      if (key.name === 'return' && aiInputBuffer.trim()) {
+        const prompt = aiInputBuffer.trim();
+        aiInputBuffer = '';
+        store.setAiLoading(true);
+        store.setAiResponse('');
+        render();
+        try {
+          const context = getCurrentAiContext();
+          const response = await getAiSuggestion(prompt, context);
+          store.setAiResponse(response);
+        } catch (error: any) {
+          store.setAiResponse(`Error: ${error.message}`);
+        } finally {
+          store.setAiLoading(false);
+        }
+        return;
+      }
+
+      // AI input: Backspace deletes from buffer
+      if (key.name === 'backspace' && aiInputBuffer.length > 0) {
+        aiInputBuffer = aiInputBuffer.slice(0, -1);
+        render();
+        return;
+      }
+
+      // AI input: Space adds space when buffer has text (otherwise falls through to toggle)
+      if (str === ' ' && aiInputBuffer.length > 0) {
+        aiInputBuffer += ' ';
+        render();
+        return;
+      }
+
       const totalItems = state.testFiles.reduce((sum, f) => sum + 1 + f.tests.length, 0);
 
       // Get selected test's actions count
@@ -1381,8 +1262,8 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
           return;
         }
 
-        // Select all with 'a'
-        if (str === 'a') {
+        // Select all with Ctrl+A
+        if (key.ctrl && key.name === 'a') {
           const totalTests = state.testFiles.reduce((sum, f) => sum + f.tests.length, 0);
           const selectedCount = Object.keys(state.selectedTests).length;
           if (selectedCount === totalTests) {
@@ -1488,6 +1369,13 @@ ${code.split('\n').map(line => '  ' + line).join('\n')}
             return;
           }
         }
+      }
+
+      // Catch-all: printable chars go to AI input buffer
+      if (str && str.length === 1 && !key.ctrl && !key.meta) {
+        aiInputBuffer += str;
+        render();
+        return;
       }
     }
 
