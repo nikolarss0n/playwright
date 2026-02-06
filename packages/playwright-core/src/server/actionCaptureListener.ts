@@ -15,8 +15,9 @@
  */
 
 import { eventsHelper } from './utils/eventsHelper';
-import { BrowserContext, type ActionStartInfo } from './browserContext';
+import { BrowserContext } from './browserContext';
 
+import type { ActionStartInfo } from './actionCaptureTypes';
 import type { RegisteredListener } from './utils/eventsHelper';
 import type { InstrumentationListener, SdkObject } from './instrumentation';
 import type { CallMetadata } from '@protocol/callMetadata';
@@ -25,76 +26,10 @@ import type { Request, Response } from './network';
 import type { ConsoleMessage } from './console';
 import type { Dialog } from './dialog';
 import type { Download } from './download';
+import type { ActionCapture, ActionCaptureCallback, NetworkRequestCapture, ConsoleMessageCapture, SnapshotCapture } from './actionCaptureTypes';
 
-// ============================================================================
-// Types - These can be imported by consumers
-// ============================================================================
-
-export type NetworkRequestCapture = {
-  method: string;
-  url: string;
-  status: number | null;
-  statusText: string;
-  startTime: number;
-  endTime: number;
-  durationMs: number;
-  resourceType: string;
-  responseHeaders?: Record<string, string>;
-  responseBody?: string;  // For JSON/text responses (truncated if large)
-  requestPostData?: string;  // POST body if present
-};
-
-export type ConsoleMessageCapture = {
-  type: string;
-  text: string;
-  timestamp: number;
-  location?: { url: string; lineNumber: number; columnNumber: number };
-};
-
-export type SnapshotCapture = {
-  before?: string;
-  after?: string;
-  diff?: {
-    added: string[];
-    removed: string[];
-    changed: string[];
-    summary: string;
-  };
-};
-
-export type ActionCapture = {
-  // Action identification
-  callId: string;
-  type: string;
-  method: string;
-  title?: string;
-  params: any;
-
-  // Timing
-  timing: {
-    startTime: number;
-    endTime: number;
-    durationMs: number;
-  };
-
-  // Captured data during action
-  network: {
-    requests: NetworkRequestCapture[];
-    summary: string;
-  };
-  console: ConsoleMessageCapture[];
-  snapshot: SnapshotCapture;
-
-  // Result
-  error?: { message: string; stack?: string };
-  result?: any;
-
-  // Context
-  pageId?: string;
-  pageUrl?: string;
-};
-
-export type ActionCaptureCallback = (capture: ActionCapture) => void;
+// Re-export types so existing importers of this module continue to work
+export type { ActionCapture, ActionCaptureCallback, NetworkRequestCapture, ConsoleMessageCapture, SnapshotCapture } from './actionCaptureTypes';
 
 // ============================================================================
 // Pending Action State

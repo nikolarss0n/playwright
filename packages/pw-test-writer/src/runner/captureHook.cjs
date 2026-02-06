@@ -3,14 +3,48 @@
  *
  * CommonJS module that gets loaded via NODE_OPTIONS --require to enable action capture.
  * Two capture mechanisms:
- * 1. BrowserContext patching - for UI tests (captures actions, network, console, snapshots)
+ * 1. BrowserContext patching - for UI tests (captures actions, network, console)
  * 2. HTTP interception - for API tests (captures outgoing HTTP requests)
+ *
+ * Works with both forked (pw-ai) and upstream Playwright by using the
+ * instrumentation API directly instead of relying on forked-only properties.
  *
  * Environment variables:
  * - PW_CAPTURE_ENDPOINT: HTTP endpoint to send captures to
  */
 
 const endpoint = process.env.PW_CAPTURE_ENDPOINT;
+
+// Methods that are read-only getters — don't represent user actions
+const readOnlyMethods = new Set([
+  'title', 'url', 'content', 'viewportSize', 'opener',
+  'querySelector', 'querySelectorAll', '$', '$$',
+  'locator', 'getByRole', 'getByText', 'getByLabel', 'getByPlaceholder',
+  'getByAltText', 'getByTitle', 'getByTestId', 'frameLocator',
+  'textContent', 'innerText', 'innerHTML', 'getAttribute',
+  'inputValue', 'isChecked', 'isDisabled', 'isEditable',
+  'isEnabled', 'isHidden', 'isVisible', 'count', 'all',
+  'first', 'last', 'nth', 'boundingBox', 'allTextContents',
+  'allInnerTexts',
+  'ownerFrame', 'contentFrame',
+  'evaluate', 'evaluateHandle', 'getProperties', 'getProperty', 'jsonValue',
+  'evaluateExpression', 'evaluateExpressionHandle',
+  'waitForSelector', 'waitForFunction', 'waitForLoadState', 'waitForURL',
+  'waitForTimeout', 'waitForEvent',
+  'childFrames', 'parentFrame', 'name', 'isDetached',
+]);
+
+// Types filtered entirely (internal infrastructure)
+const filteredTypes = new Set([
+  'Tracing', 'Artifact', 'JsonPipe', 'LocalUtils',
+]);
+
+function shouldCapture(metadata) {
+  if (metadata.internal) return false;
+  if (filteredTypes.has(metadata.type)) return false;
+  if (readOnlyMethods.has(metadata.method)) return false;
+  return true;
+}
 
 if (endpoint) {
   // === 1. BrowserContext patching for UI tests ===
@@ -28,10 +62,17 @@ if (endpoint) {
             if (BrowserContext &&
                 typeof BrowserContext === 'function' &&
                 !BrowserContext._captureHookPatched &&
-                BrowserContext._allContexts) {
+                BrowserContext.Events) {
               patched = true;
               BrowserContext._captureHookPatched = true;
-              patchBrowserContext(BrowserContext);
+
+              if (BrowserContext._allContexts) {
+                // Forked playwright-core: use built-in capture machinery
+                patchBrowserContextForked(BrowserContext);
+              } else {
+                // Upstream playwright: use direct instrumentation
+                patchBrowserContextUpstream(BrowserContext);
+              }
               return true;
             }
           }
@@ -55,7 +96,10 @@ if (endpoint) {
   installHttpInterceptor();
 }
 
-function patchBrowserContext(BrowserContext) {
+/**
+ * Forked playwright-core path: use onActionCapture/onActionStart
+ */
+function patchBrowserContextForked(BrowserContext) {
   BrowserContext.onActionStart = async (info, context) => {
     try {
       await sendCapture({
@@ -87,13 +131,228 @@ function patchBrowserContext(BrowserContext) {
           network: capture.network,
           console: capture.console,
           snapshot: capture.snapshot ? {
+            before: capture.snapshot.before,
+            after: capture.snapshot.after,
             diff: capture.snapshot.diff,
           } : undefined,
           error: capture.error,
+          params: capture.params,
+          pageUrl: capture.pageUrl,
+          result: capture.result,
         },
       });
     } catch {}
   };
+}
+
+/**
+ * Upstream playwright path: monkey-patch _initialize to attach instrumentation
+ */
+function patchBrowserContextUpstream(BrowserContext) {
+  const origInitialize = BrowserContext.prototype._initialize;
+  BrowserContext.prototype._initialize = async function() {
+    const result = await origInitialize.call(this);
+    installContextCapture(this, BrowserContext);
+    return result;
+  };
+}
+
+/**
+ * Install action & network capture on a single BrowserContext instance
+ * using the internal instrumentation API.
+ */
+function installContextCapture(context, BrowserContext) {
+  const pendingActions = new Map();
+
+  const listener = {
+    onBeforeCall(sdkObject, metadata) {
+      if (!shouldCapture(metadata)) return;
+
+      pendingActions.set(metadata.id, {
+        metadata,
+        networkRequests: new Map(),
+        completedRequests: [],
+        consoleMessages: [],
+      });
+
+      const actionName = metadata.title || `${metadata.type}.${metadata.method}`;
+      sendCapture({
+        type: 'action:start',
+        sessionId: process.env.PW_CAPTURE_SESSION || 'default',
+        timestamp: Date.now(),
+        data: {
+          callId: metadata.id,
+          type: metadata.type,
+          method: metadata.method,
+          title: actionName,
+          startTime: metadata.startTime,
+        },
+      }).catch(() => {});
+    },
+
+    onAfterCall(sdkObject, metadata) {
+      const pending = pendingActions.get(metadata.id);
+      if (!pending) return;
+      pendingActions.delete(metadata.id);
+
+      // Merge completed + still-pending network requests
+      const allRequests = [...pending.completedRequests];
+      const now = Date.now();
+      for (const [request, info] of pending.networkRequests.entries()) {
+        try {
+          allRequests.push({
+            method: request.method(),
+            url: request.url(),
+            status: null,
+            statusText: 'pending',
+            startTime: info.startTime,
+            endTime: now,
+            durationMs: now - info.startTime,
+            resourceType: request.resourceType(),
+          });
+        } catch {}
+      }
+
+      const actionName = metadata.title || `${metadata.type}.${metadata.method}`;
+      const page = sdkObject.attribution?.page;
+      const capture = {
+        type: metadata.type,
+        method: metadata.method,
+        title: actionName,
+        params: metadata.params,
+        timing: {
+          startTime: metadata.startTime,
+          endTime: metadata.endTime,
+          durationMs: metadata.endTime - metadata.startTime,
+        },
+        network: {
+          requests: allRequests,
+          summary: formatNetworkSummary(allRequests),
+        },
+        console: pending.consoleMessages,
+        pageUrl: page ? safeGetUrl(page) : undefined,
+      };
+
+      if (metadata.error) {
+        capture.error = {
+          message: metadata.error.error?.message || metadata.error.message || 'Unknown error',
+        };
+      }
+
+      sendCapture({
+        type: 'action:capture',
+        sessionId: process.env.PW_CAPTURE_SESSION || 'default',
+        timestamp: Date.now(),
+        data: capture,
+      }).catch(() => {});
+    },
+  };
+
+  context.instrumentation.addListener(listener, context);
+
+  // Network event listeners
+  const Events = BrowserContext.Events;
+
+  context.on(Events.Request, (request) => {
+    try {
+      const postData = request.postDataBuffer()?.toString('utf-8')?.slice(0, 2000);
+      for (const pending of pendingActions.values()) {
+        pending.networkRequests.set(request, { startTime: Date.now(), postData });
+      }
+    } catch {}
+  });
+
+  context.on(Events.Response, (response) => {
+    try {
+      const request = response.request();
+      // Capture status from Response event (since _existingResponse may not work)
+      for (const pending of pendingActions.values()) {
+        const info = pending.networkRequests.get(request);
+        if (info) {
+          info.status = response.status();
+          info.statusText = response.statusText();
+        }
+      }
+      const contentType = (response.headers()['content-type'] || '');
+      const isTextual = contentType.includes('json') ||
+                        contentType.includes('text') ||
+                        contentType.includes('javascript') ||
+                        contentType.includes('xml');
+      if (isTextual) {
+        response.body().then(buffer => {
+          const body = buffer.toString('utf-8').slice(0, 5000);
+          for (const pending of pendingActions.values()) {
+            const info = pending.networkRequests.get(request);
+            if (info) info.responseBody = body;
+          }
+        }).catch(() => {});
+      }
+    } catch {}
+  });
+
+  context.on(Events.RequestFinished, (request) => {
+    completeRequest(pendingActions, request, false);
+  });
+
+  context.on(Events.RequestFailed, (request) => {
+    completeRequest(pendingActions, request, true);
+  });
+
+  context.on(Events.Console, (message) => {
+    try {
+      const msg = {
+        type: message.type(),
+        text: message.text(),
+        timestamp: Date.now(),
+        location: message.location(),
+      };
+      for (const pending of pendingActions.values()) {
+        pending.consoleMessages.push(msg);
+      }
+    } catch {}
+  });
+}
+
+function completeRequest(pendingActions, request, failed) {
+  const now = Date.now();
+  for (const pending of pendingActions.values()) {
+    const info = pending.networkRequests.get(request);
+    if (!info) continue;
+    pending.networkRequests.delete(request);
+
+    try {
+      const response = request._existingResponse?.() ?? null;
+      pending.completedRequests.push({
+        method: request.method(),
+        url: request.url(),
+        status: failed ? 0 : (response?.status() ?? info.status ?? null),
+        statusText: failed ? 'failed' : (response?.statusText() ?? info.statusText ?? ''),
+        startTime: info.startTime,
+        endTime: now,
+        durationMs: now - info.startTime,
+        resourceType: request.resourceType(),
+        responseBody: info.responseBody,
+        requestPostData: info.postData,
+      });
+    } catch {}
+  }
+}
+
+function safeGetUrl(page) {
+  try { return page.mainFrame().url(); } catch { return undefined; }
+}
+
+function formatNetworkSummary(requests) {
+  if (requests.length === 0) return '';
+  return requests.map(r => {
+    try {
+      const pathname = new URL(r.url).pathname;
+      const status = r.status !== null ? ` (${r.status})` : ' (pending)';
+      return `${r.method} ${pathname}${status}`;
+    } catch {
+      return `${r.method} ${r.url}`;
+    }
+  }).join(', ');
 }
 
 /**
@@ -299,3 +558,4 @@ async function sendCapture(event) {
     // Ignore failures
   }
 }
+

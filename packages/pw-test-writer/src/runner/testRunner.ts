@@ -467,14 +467,24 @@ async function runTestWithSpawn(
         for (const line of lines) {
           const trimmed = line.trim();
 
-          if (!capturing && trimmed.startsWith('Error:')) {
+          if (!capturing && (
+            trimmed.startsWith('Error:') ||
+            trimmed.startsWith('expect(') ||
+            trimmed.startsWith('Expected:') ||
+            trimmed.startsWith('Received:')
+          )) {
             capturing = true;
           }
 
           if (capturing) {
             errorLines.push(line);
-            // Stop after 'at' location line or enough context
-            if (trimmed.startsWith('at ') || errorLines.length >= 20) {
+            if (errorLines.length >= 50) {
+              break;
+            }
+            // Stop after 'at' location line, but keep going for
+            // Expected/Received/Call log sections
+            if (trimmed.startsWith('at ') &&
+                !lines[lines.indexOf(line) + 1]?.trim().match(/^(Expected|Received|Call log|at )/)) {
               break;
             }
           }

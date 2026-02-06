@@ -14,30 +14,28 @@
  * limitations under the License.
  */
 
+import type { SnapshotDiff } from 'playwright-core/lib/server/actionCaptureTypes';
 import type { ConsoleMessage } from './tab';
 
-export type NetworkRequest = {
+// Re-export SnapshotDiff for consumers that import it from here
+export type { SnapshotDiff } from 'playwright-core/lib/server/actionCaptureTypes';
+
+export type McpNetworkRequest = {
   method: string;
   url: string;
   status: number | null;
   durationMs: number;
 };
 
-export type SnapshotDiff = {
-  added: string[];
-  removed: string[];
-  changed: string[];
-  summary: string;
-};
+/** @deprecated Use McpNetworkRequest instead */
+export type NetworkRequest = McpNetworkRequest;
 
-export type ActionCapture = {
+export type McpActionCapture = {
   timing: {
-    startMs: number;
-    endMs: number;
     durationMs: number;
   };
   network: {
-    requests: NetworkRequest[];
+    requests: McpNetworkRequest[];
     summary: string;
   };
   snapshot: {
@@ -48,16 +46,19 @@ export type ActionCapture = {
   console: ConsoleMessage[];
 };
 
-export function createEmptyActionCapture(): ActionCapture {
+/** @deprecated Use McpActionCapture instead */
+export type ActionCapture = McpActionCapture;
+
+export function createEmptyActionCapture(): McpActionCapture {
   return {
-    timing: { startMs: 0, endMs: 0, durationMs: 0 },
+    timing: { durationMs: 0 },
     network: { requests: [], summary: '' },
     snapshot: {},
     console: [],
   };
 }
 
-export function formatNetworkSummary(requests: NetworkRequest[]): string {
+export function formatNetworkSummary(requests: McpNetworkRequest[]): string {
   if (requests.length === 0)
     return '';
   return requests
@@ -69,7 +70,7 @@ export function formatNetworkSummary(requests: NetworkRequest[]): string {
     .join(', ');
 }
 
-export function renderActionCapture(capture: ActionCapture): string[] {
+export function renderActionCapture(capture: McpActionCapture): string[] {
   const lines: string[] = [];
 
   // Timing

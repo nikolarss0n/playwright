@@ -98,9 +98,10 @@ test.describe(() => {
     require('../../packages/playwright-core/lib/server/dispatchers/dispatcher').setMaxDispatchersForTest(100);
   });
 
-  test('should collect stale handles', async ({ page, server }) => {
+test('should collect stale handles', async ({ page, server }) => {
     page.on('request', () => {});
     const response = await page.goto(server.PREFIX + '/title.html');
+    await page.waitForResponse(url => url.includes('/title.html'));
     for (let i = 0; i < 200; ++i) {
       await page.evaluate(async () => {
         const response = await fetch('/');

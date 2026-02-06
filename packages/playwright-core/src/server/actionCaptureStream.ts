@@ -5,8 +5,11 @@
  * Supports multiple backends: HTTP API, WebSocket, PostgreSQL, etc.
  */
 
-import type { ActionCapture } from './actionCaptureListener';
+import type { ActionCapture, StreamEventType, StreamEvent } from './actionCaptureTypes';
 import type { BrowserContext } from './browserContext';
+
+// Re-export so existing importers continue to work
+export type { StreamEventType, StreamEvent } from './actionCaptureTypes';
 
 // ============================================================================
 // Types
@@ -27,21 +30,6 @@ export interface StreamBackend {
   connect(): Promise<void>;
   send(event: StreamEvent): Promise<void>;
   disconnect(): Promise<void>;
-}
-
-export type StreamEventType =
-  | 'session:start'
-  | 'session:end'
-  | 'action:capture'
-  | 'test:start'
-  | 'test:end'
-  | 'error';
-
-export interface StreamEvent {
-  type: StreamEventType;
-  sessionId: string;
-  timestamp: number;
-  data: any;
 }
 
 // ============================================================================

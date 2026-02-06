@@ -3,7 +3,9 @@
  */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { store, ActionCapture, NetworkRequestCapture, TestResult } from '../ui/store.js';
+import { store } from '../ui/store.js';
+import type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/server/actionCaptureTypes';
+import type { TestResult } from '../ui/store.js';
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -162,6 +164,7 @@ export async function getAiSuggestion(prompt: string, context: AiContext): Promi
 CURRENT CONTEXT:
 - Test name: ${context.testName || 'Unknown'}
 - Test file: ${context.testFilePath || 'Unknown'}
+- Page URL: ${context.action?.pageUrl || 'Unknown'}
 - Current action being viewed: ${context.action ? `${context.action.type}.${context.action.method}` : 'None'}
 - Network request being viewed: ${context.networkRequest ? `${context.networkRequest.method} ${context.networkRequest.url}` : 'None'}
 
@@ -232,14 +235,51 @@ function buildContextDetails(context: AiContext): string {
     if (context.action.title) {
       parts.push(`- Title: ${context.action.title}`);
     }
+    if (context.action.params) {
+      const paramStr = typeof context.action.params === 'string'
+        ? context.action.params
+        : JSON.stringify(context.action.params, null, 2).slice(0, 300);
+      parts.push(`- Params: ${paramStr}`);
+    }
+    if (context.action.pageUrl) {
+      parts.push(`- Page URL: ${context.action.pageUrl}`);
+    }
     parts.push(`- Duration: ${context.action.timing?.durationMs || '?'}ms`);
     if (context.action.error) {
       parts.push(`- Error: ${context.action.error.message}`);
+      if (context.action.error.stack) {
+        parts.push(`- Stack:\n\`\`\`\n${context.action.error.stack.slice(0, 500)}\n\`\`\``);
+      }
     }
     if (context.action.snapshot?.diff) {
       const diff = context.action.snapshot.diff;
       if (diff.added.length || diff.removed.length || diff.changed.length) {
-        parts.push(`- Page changes: ${diff.summary}`);
+        parts.push(`- Page changes:`);
+        if (diff.added.length > 0)
+          parts.push(`  - Added: ${diff.added.slice(0, 10).join(', ')}`);
+        if (diff.removed.length > 0)
+          parts.push(`  - Removed: ${diff.removed.slice(0, 10).join(', ')}`);
+        if (diff.changed.length > 0)
+          parts.push(`  - Changed: ${diff.changed.slice(0, 10).join(', ')}`);
+      }
+    }
+    if (context.action.error && context.action.snapshot?.after) {
+      parts.push(`- Page state after failure:\n\`\`\`\n${context.action.snapshot.after.slice(0, 2000)}\n\`\`\``);
+    }
+    if (context.action.console?.length > 0) {
+      const errors = context.action.console.filter((c: { type: string }) => c.type === 'error');
+      const warnings = context.action.console.filter((c: { type: string }) => c.type === 'warn' || c.type === 'warning');
+      if (errors.length > 0) {
+        parts.push(`\n**Console Errors (${errors.length}):**`);
+        for (const err of errors.slice(0, 5)) {
+          parts.push(`- ${err.text.slice(0, 200)}`);
+        }
+      }
+      if (warnings.length > 0) {
+        parts.push(`\n**Console Warnings (${warnings.length}):**`);
+        for (const w of warnings.slice(0, 3)) {
+          parts.push(`- ${w.text.slice(0, 200)}`);
+        }
       }
     }
   }
@@ -248,6 +288,9 @@ function buildContextDetails(context: AiContext): string {
     parts.push(`\n**Network Request:**`);
     parts.push(`- ${context.networkRequest.method} ${context.networkRequest.url}`);
     parts.push(`- Status: ${context.networkRequest.status ?? 'pending'}`);
+    if (context.networkRequest.resourceType) {
+      parts.push(`- Type: ${context.networkRequest.resourceType}`);
+    }
     if (context.networkRequest.requestPostData) {
       parts.push(`- Request Body:\n\`\`\`json\n${context.networkRequest.requestPostData.slice(0, 500)}\n\`\`\``);
     }
@@ -264,6 +307,19 @@ function buildContextDetails(context: AiContext): string {
     }
     if (context.allActions.length > 10) {
       parts.push(`- ... and ${context.allActions.length - 10} more`);
+    }
+
+    const failedRequests = context.allActions
+      .flatMap(a => a.network?.requests || [])
+      .filter(r => r.status && r.status >= 400);
+    if (failedRequests.length > 0) {
+      parts.push(`\n**Failed Network Requests:**`);
+      for (const r of failedRequests.slice(0, 5)) {
+        parts.push(`- ${r.method} ${r.url} → ${r.status}`);
+        if (r.responseBody) {
+          parts.push(`  Response: ${r.responseBody.slice(0, 200)}`);
+        }
+      }
     }
   }
 

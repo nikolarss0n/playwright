@@ -1,3 +1,8 @@
+import type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/server/actionCaptureTypes';
+
+// Re-export for consumers that import these from store
+export type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/server/actionCaptureTypes';
+
 // Simple state store (no external dependencies)
 export type TabId = 'steps' | 'pom' | 'business' | 'test' | 'network' | 'console' | 'tests';
 export type ModelId = 'haiku' | 'opus';
@@ -20,35 +25,8 @@ export interface NetworkRequest {
 export interface ConsoleMessage {
   type: 'log' | 'error' | 'warn' | 'info';
   text: string;
-}
-
-// Action capture from test runs
-export interface NetworkRequestCapture {
-  method: string;
-  url: string;
-  status: number | null;
-  statusText?: string;
-  durationMs: number;
-  resourceType?: string;
-  responseHeaders?: Record<string, string>;
-  responseBody?: string;
-  requestPostData?: string;
-}
-
-export interface ActionCapture {
-  type: string;
-  method: string;
-  title?: string;
-  timing: { durationMs: number };
-  network: {
-    requests: NetworkRequestCapture[];
-    summary: string;
-  };
-  snapshot: {
-    diff?: { added: string[]; removed: string[]; changed: string[]; summary: string };
-  };
-  console: Array<{ type: string; text: string }>;
-  error?: { message: string };
+  timestamp: number;
+  location?: { url: string; lineNumber: number; columnNumber: number };
 }
 
 // Test file discovery
@@ -265,8 +243,8 @@ class Store {
     this.setState({ networkRequests });
   }
 
-  addConsoleMessage(msg: ConsoleMessage) {
-    const consoleMessages = [...this.state.consoleMessages.slice(-100), msg];
+  addConsoleMessage(msg: Omit<ConsoleMessage, 'timestamp'> & { timestamp?: number }) {
+    const consoleMessages = [...this.state.consoleMessages.slice(-100), { ...msg, timestamp: msg.timestamp ?? Date.now() }];
     this.setState({ consoleMessages });
   }
 
@@ -415,6 +393,7 @@ class Store {
       this.addConsoleMessage({
         type: msg.type as ConsoleMessage['type'],
         text: msg.text,
+        location: msg.location,
       });
     }
   }

@@ -24,6 +24,8 @@ test('cycle frames', async ({ page, server }) => {
   const kFrameCount = 310;
 
   await page.goto(server.EMPTY_PAGE);
+  await page.waitForResponse(url => url.includes('empty.html'));
+  
   let cb;
   const promise = new Promise(f => cb = f);
   let counter = 0;

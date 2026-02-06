@@ -37,7 +37,7 @@ import { Selectors } from './selectors';
 import { Tracing } from './trace/recorder/tracing';
 import * as rawStorageSource from '../generated/storageScriptSource';
 import { ActionCaptureListener } from './actionCaptureListener';
-import type { ActionCapture } from './actionCaptureListener';
+import type { ActionCapture, ActionStartInfo } from './actionCaptureTypes';
 
 import type { Artifact } from './artifact';
 import type { Browser, BrowserOptions } from './browser';
@@ -49,14 +49,8 @@ import type { SerializedStorage } from '@injected/storageScript';
 import type * as types from './types';
 import type * as channels from '@protocol/channels';
 
-export type ActionStartInfo = {
-  callId: string;
-  type: string;
-  method: string;
-  title?: string;
-  params: any;
-  startTime: number;
-};
+// Re-export so existing importers continue to work
+export type { ActionStartInfo } from './actionCaptureTypes';
 
 export abstract class BrowserContext extends SdkObject {
   // Registry of all active contexts for enabling capture retroactively
