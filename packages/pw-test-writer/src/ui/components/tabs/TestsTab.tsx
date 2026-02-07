@@ -23,7 +23,8 @@ export function TestsTab({ maxLines, width }: TestsTabProps) {
     return (
       <Box flexDirection="column">
         <Text> </Text>
-        <Text>  {chalk.hex(colors.textMuted)(chars.circle)} {chalk.hex(colors.textDim)('No test files')} {chalk.hex(colors.borderDim)('·')} {chalk.hex(colors.textDim)('Press F8 to scan')}</Text>
+        <Text>  {chalk.hex(colors.primary)(chars.circle)} {chalk.hex(colors.textSecondary)('No tests found')} {chalk.hex(colors.borderDim)('·')} {chalk.hex(colors.textMuted)('F8 Refresh')}</Text>
+        <Text>  {chalk.hex(colors.textDim)('  Use the prompt below to generate tests')}</Text>
       </Box>
     );
   }
@@ -54,14 +55,13 @@ export function TestsTab({ maxLines, width }: TestsTabProps) {
   }
   const selectedResult: TestResult | null = selectedTestKey ? testResults.find(r => r.testKey === selectedTestKey) ?? null : null;
 
-  // Header row with selection count
+  // Header row with selection count and URL
   const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
   const selectedCount = Object.keys(selectedTests).length;
-  const headerTitle = chalk.hex(colors.text).bold(`Tests (${totalTests})`);
+  const headerTitle = chalk.hex(colors.primary).bold(`Tests`) + chalk.hex(colors.textMuted)(` (${totalTests})`);
   const headerSelection = selectedCount > 0
-    ? chalk.hex(colors.secondary)(` · ${selectedCount} selected`)
+    ? chalk.hex(colors.textDim)(` · ${selectedCount} selected`)
     : '';
-
   const panelLines = maxLines - 1;
 
   // Build separator column — alternating chars for subtle dotted effect

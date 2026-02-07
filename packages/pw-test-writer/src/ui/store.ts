@@ -109,8 +109,8 @@ type Listener = () => void;
 
 class Store {
   private state: AppState = {
-    mode: 'write',
-    activeTab: 'steps',
+    mode: 'run',
+    activeTab: 'tests',
     selectedModel: 'haiku',
     isRunning: false,
     stopRequested: false,

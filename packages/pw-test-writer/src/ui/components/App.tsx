@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp } from 'ink';
 import * as fs from 'fs';
 import { useScreenSize } from 'fullscreen-ink';
@@ -37,9 +37,23 @@ export function App({ onSubmit }: AppProps) {
     store.getState().baseURL ? 'task' : 'baseURL'
   );
   const busyRef = useRef(false);
-  const aiInputActiveRef = useRef(false);
-  const handleAiInputActive = useCallback((active: boolean) => {
-    aiInputActiveRef.current = active;
+  const [aiInputFocused, setAiInputFocused] = useState(false);
+  const [aiInitialChar, setAiInitialChar] = useState<string | undefined>(undefined);
+  const aiInputFocusedRef = useRef(false);
+  const handleAiFocusChange = useCallback((focused: boolean) => {
+    aiInputFocusedRef.current = focused;
+    setAiInputFocused(focused);
+    if (!focused) setAiInitialChar(undefined);
+  }, []);
+
+  // Auto-discover tests on startup
+  useEffect(() => {
+    store.setStatus('Discovering tests...');
+    discoverTests(process.cwd()).then(testFiles => {
+      store.setTestFiles(testFiles);
+      const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
+      store.setStatus(`Found ${testFiles.length} files with ${totalTests} tests`);
+    });
   }, []);
 
   // Tick for progress timer
@@ -224,8 +238,8 @@ export function App({ onSubmit }: AppProps) {
 
     // Escape handling
     if (key.name === 'escape') {
-      if (aiInputActiveRef.current) {
-        aiInputActiveRef.current = false;
+      if (aiInputFocusedRef.current) {
+        handleAiFocusChange(false);
         return;
       }
       if (s.isRunning) {
@@ -246,8 +260,18 @@ export function App({ onSubmit }: AppProps) {
       return;
     }
 
+    // Activate AI input on printable character when in run mode idle
+    if (s.mode === 'run' && !s.isRunning && !aiInputFocusedRef.current) {
+      if (!key.ctrl && !key.meta && key.sequence && key.sequence.length === 1 && key.sequence >= '!' && key.sequence <= '~') {
+        setAiInitialChar(key.sequence);
+        aiInputFocusedRef.current = true;
+        setAiInputFocused(true);
+        return;
+      }
+    }
+
     // Run mode navigation (skip when typing in AI input)
-    if (s.mode === 'run' && !s.isRunning && !aiInputActiveRef.current) {
+    if (s.mode === 'run' && !s.isRunning && !aiInputFocusedRef.current) {
       const totalItems = s.testFiles.reduce((sum, f) => sum + 1 + f.tests.length, 0);
 
       if ((key.name === 'right' && s.panelFocus === 'tests') || (key.name === 'left' && s.panelFocus === 'actions')) {
@@ -379,34 +403,6 @@ export function App({ onSubmit }: AppProps) {
     } catch (err) { logError('keypress handler', err); }
   }, [exit, inputMode, findSelectedTest, getSelectedResult]));
 
-  // Centered splash layout: write mode idle with no content yet
-  const hasContent = state.steps.length > 0 || state.pomCode || state.businessCode || state.testCode;
-  const showSplash = state.mode === 'write' && !state.isRunning && !hasContent;
-
-  if (showSplash) {
-    return (
-      <Box flexDirection="column" width={width} height={height}>
-        <MenuBar />
-        <Box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" gap={1}>
-          <Box flexDirection="column" alignItems="center">
-            <Text>{th.primary.bold('playwright')}{th.textMuted(' test-writer')}</Text>
-            <Text color={colors.borderDim}>{'─'.repeat(30)}</Text>
-          </Box>
-          <InputBar
-            onSubmitTask={handleSubmitTask}
-            onSubmitBaseURL={handleSubmitBaseURL}
-            inputMode={inputMode}
-            onInputModeChange={setInputMode}
-          />
-          <Box flexDirection="column" alignItems="center" marginTop={1}>
-            <Text color={colors.textMuted}>F7 Runner  F9 Model  F10 URL  Esc Quit</Text>
-          </Box>
-        </Box>
-        <StatusBar />
-      </Box>
-    );
-  }
-
   // Normal layout with content area
   // Chrome: menubar(1) + inputbar(0-2) + statusbar(1) + content border(2) = 4-6
   const inputBarLines = state.mode === 'write' ? 2 : state.isRunning ? 1 : 0;
@@ -426,10 +422,10 @@ export function App({ onSubmit }: AppProps) {
         inputMode={inputMode}
         onInputModeChange={setInputMode}
       />
-      <Box borderStyle="round" borderColor={colors.borderDim} paddingX={1} flexGrow={1} marginTop={topPad}>
+      <Box borderStyle="round" borderColor={state.isRunning ? colors.primary : colors.borderDim} paddingX={1} flexGrow={1} marginTop={topPad}>
         <ContentArea maxLines={contentHeight} width={width - 4} />
       </Box>
-      <AiBar onSubmitPrompt={handleAiPrompt} onInputActive={handleAiInputActive} height={height} />
+      <AiBar onSubmitPrompt={handleAiPrompt} focused={aiInputFocused} onFocusChange={handleAiFocusChange} initialChar={aiInitialChar} height={height} />
       <StatusBar />
     </Box>
   );

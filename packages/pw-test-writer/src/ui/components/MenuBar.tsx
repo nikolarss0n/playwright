@@ -3,7 +3,7 @@ import { Box, Text, Spacer } from 'ink';
 import chalk from 'chalk';
 import { colors } from '../theme.js';
 import { useStore } from '../hooks/useStore.js';
-import type { TabId, ModelId } from '../store.js';
+import type { TabId } from '../store.js';
 
 const WRITE_TABS: { id: TabId; label: string; fkey: string }[] = [
   { id: 'steps', label: 'Steps', fkey: 'F1' },
@@ -18,29 +18,16 @@ const RUN_TABS: { id: TabId; label: string; fkey: string }[] = [
   { id: 'tests', label: 'Tests', fkey: 'F1' },
 ];
 
-const MODELS: { id: ModelId; label: string }[] = [
-  { id: 'haiku', label: 'Haiku 4.5' },
-  { id: 'opus', label: 'Opus 4.5' },
-];
-
-export { WRITE_TABS, RUN_TABS, MODELS };
+export { WRITE_TABS, RUN_TABS };
 
 export function MenuBar() {
   const mode = useStore(s => s.mode);
   const activeTab = useStore(s => s.activeTab);
-  const selectedModel = useStore(s => s.selectedModel);
   const baseURL = useStore(s => s.baseURL);
   const networkCount = useStore(s => s.networkRequests.length);
   const consoleCount = useStore(s => s.consoleMessages.length);
-  const testFiles = useStore(s => s.testFiles);
 
   const TABS = mode === 'run' ? RUN_TABS : WRITE_TABS;
-  const model = MODELS.find(m => m.id === selectedModel)!;
-
-  // Mode badge
-  const modeColor = mode === 'run' ? colors.success : colors.primary;
-  const modeLabel = mode === 'run' ? 'RUNNER' : 'WRITER';
-  const modeBadge = chalk.hex(modeColor).bold(`[${modeLabel}]`);
 
   // Tabs (hidden in runner mode — single view)
   const tabParts: string[] = [];
@@ -57,23 +44,29 @@ export function MenuBar() {
     }
   }
 
-  // Right side: model (write mode) + URL
-  const rightParts: string[] = [];
-  if (mode === 'write') rightParts.push(chalk.hex(colors.info)(model.label));
+  let urlDisplay = '';
   if (baseURL) {
     try {
-      const host = new URL(baseURL).host;
-      rightParts.push(chalk.hex(colors.secondary)(host));
+      urlDisplay = chalk.hex(colors.secondary)(new URL(baseURL).host);
     } catch {
-      rightParts.push(chalk.hex(colors.secondary)(baseURL));
+      urlDisplay = chalk.hex(colors.secondary)(baseURL);
     }
   }
 
+  const title = chalk.hex(colors.primary).bold('playwright') + chalk.hex(colors.textMuted)(' test-writer');
+
   return (
     <Box paddingX={1}>
-      <Text>{modeBadge}{tabParts.length > 0 ? '  ' + tabParts.join('  ') : ''}</Text>
-      <Spacer />
-      {rightParts.length > 0 && <Text>{rightParts.join(chalk.hex(colors.textMuted)('  │  '))}</Text>}
+      <Box width="33%">
+        {urlDisplay ? <Text>{urlDisplay}</Text> : null}
+      </Box>
+      <Box width="34%" justifyContent="center">
+        {tabParts.length > 0
+          ? <Text>{tabParts.join('  ')}</Text>
+          : <Text>{title}</Text>
+        }
+      </Box>
+      <Box width="33%" />
     </Box>
   );
 }

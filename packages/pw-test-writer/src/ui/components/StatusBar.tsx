@@ -63,7 +63,7 @@ export function StatusBar() {
       <Text wrap="truncate">{th.borderDim('─'.repeat(200))}</Text>
       <Box paddingX={1} justifyContent="space-between">
         <Text>{leftParts.join(chalk.hex(colors.textMuted)('  │  '))}</Text>
-        <Text color={colors.textDim}>{hints.join('  ')}</Text>
+        <Text color={colors.textMuted}>{hints.join(chalk.hex(colors.borderDim)('  ·  '))}</Text>
       </Box>
     </Box>
   );
