@@ -1,11 +1,15 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Box, Text } from 'ink';
 import chalk from 'chalk';
 import { colors, chars } from '../../theme.js';
 import { useStore } from '../../hooks/useStore.js';
+import { useInterval } from '../../hooks/useInterval.js';
 import { TestList } from './TestList.js';
 import { ActionPanel } from './ActionPanel.js';
 import type { TestResult } from '../../store.js';
+
+const spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const dots = ['   ', '.  ', '.. ', '...'];
 
 interface TestsTabProps {
   maxLines: number;
@@ -18,11 +22,33 @@ export function TestsTab({ maxLines, width }: TestsTabProps) {
   const selectedTests = useStore(s => s.selectedTests);
   const testSelectionIndex = useStore(s => s.testSelectionIndex);
   const panelFocus = useStore(s => s.panelFocus);
+  const status = useStore(s => s.status);
+
+  const isDiscovering = status.includes('Discovering');
+  const [frame, setFrame] = useState(0);
+  useInterval(() => setFrame(f => f + 1), isDiscovering ? 80 : null);
 
   if (testFiles.length === 0) {
+    const midY = Math.floor(maxLines / 2) - 1;
+    const pad = (n: number) => Array.from({ length: n }, () => <Text key={`p${n}${Math.random()}`}>{' '}</Text>);
+
+    if (isDiscovering) {
+      const spinner = chalk.hex(colors.primary)(spinnerFrames[frame % spinnerFrames.length]);
+      const dotAnim = chalk.hex(colors.textDim)(dots[Math.floor(frame / 4) % dots.length]);
+      const label = chalk.hex(colors.textSecondary)('Discovering tests');
+      return (
+        <Box flexDirection="column" alignItems="center" width={width}>
+          {pad(midY)}
+          <Text>{spinner} {label}{dotAnim}</Text>
+          <Text> </Text>
+          <Text color={colors.textMuted}>Scanning playwright config...</Text>
+        </Box>
+      );
+    }
+
     return (
-      <Box flexDirection="column">
-        <Text> </Text>
+      <Box flexDirection="column" alignItems="center" width={width}>
+        {pad(midY)}
         <Text>  {chalk.hex(colors.primary)(chars.circle)} {chalk.hex(colors.textSecondary)('No tests found')} {chalk.hex(colors.borderDim)('·')} {chalk.hex(colors.textMuted)('F8 Refresh')}</Text>
         <Text>  {chalk.hex(colors.textDim)('  Use the prompt below to generate tests')}</Text>
       </Box>
@@ -70,9 +96,9 @@ export function TestsTab({ maxLines, width }: TestsTabProps) {
   ));
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={maxLines}>
       <Text>{headerTitle}{headerSelection}</Text>
-      <Box>
+      <Box height={panelLines}>
         <Box width={leftWidth} flexDirection="column">
           <TestList width={leftWidth} maxLines={panelLines} />
         </Box>

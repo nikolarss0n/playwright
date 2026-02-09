@@ -1,11 +1,10 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Box, Text, useApp } from 'ink';
-import * as fs from 'fs';
 import { useScreenSize } from 'fullscreen-ink';
 import { useStore, useAppState } from '../hooks/useStore.js';
 import { useKeypress, type KeypressEvent } from '../hooks/useKeypress.js';
 import { useInterval } from '../hooks/useInterval.js';
-import { store, type AppMode, type ModelId } from '../store.js';
+import { store, type AppMode, type ModelId, type TestFile, type TestCase } from '../store.js';
 import { colors, th } from '../theme.js';
 import { logError } from '../index.js';
 import { MenuBar, WRITE_TABS, RUN_TABS } from './MenuBar.js';
@@ -15,8 +14,36 @@ import { ContentArea } from './ContentArea.js';
 import { AiBar } from './AiBar.js';
 import { StatusBar } from './StatusBar.js';
 import { saveBaseURL } from '../../config/playwright.js';
+import { exec } from 'child_process';
 import { discoverTests, runSelectedTests, killCurrentTest } from '../../runner/testRunner.js';
+import { loadHistory } from '../../runner/history.js';
 import { getAiSuggestion, getCurrentAiContext, extractCodeFromResponse, replaceTestInFile } from '../../ai/assistant.js';
+import { computeLineDiff, contextDiff } from '../../ai/diff.js';
+
+/** Flat indices of tests matching a filter string (skips file headers). */
+function getMatchingTestIndices(testFiles: TestFile[], filter: string): number[] {
+  if (!filter) {
+    const indices: number[] = [];
+    let idx = 0;
+    for (const file of testFiles) {
+      indices.push(idx++);
+      for (const _test of file.tests) indices.push(idx++);
+    }
+    return indices;
+  }
+  const lower = filter.toLowerCase();
+  const indices: number[] = [];
+  let idx = 0;
+  for (const file of testFiles) {
+    const fileMatch = file.relativePath.toLowerCase().includes(lower);
+    idx++; // file header
+    for (const test of file.tests) {
+      if (fileMatch || test.title.toLowerCase().includes(lower)) indices.push(idx);
+      idx++;
+    }
+  }
+  return indices;
+}
 
 interface AppProps {
   onSubmit: (task: string, model: string, baseURL: string) => Promise<void>;
@@ -27,6 +54,12 @@ function getModelId(model: ModelId): string {
     case 'haiku': return 'claude-haiku-4-5-20251001';
     case 'opus': return 'claude-opus-4-5-20251101';
   }
+}
+
+function openFile(filePath: string): void {
+  const cmd = process.platform === 'darwin' ? 'open'
+    : process.platform === 'win32' ? 'start' : 'xdg-open';
+  exec(`${cmd} "${filePath}"`);
 }
 
 export function App({ onSubmit }: AppProps) {
@@ -46,13 +79,20 @@ export function App({ onSubmit }: AppProps) {
     if (!focused) setAiInitialChar(undefined);
   }, []);
 
-  // Auto-discover tests on startup
+  // Auto-discover tests and load history on startup
   useEffect(() => {
+    const cwd = process.cwd();
+    // Load history synchronously (fast, local JSON)
+    try { store.setState({ testHistory: loadHistory(cwd) }); } catch {}
+
     store.setStatus('Discovering tests...');
-    discoverTests(process.cwd()).then(testFiles => {
+    discoverTests(cwd).then(testFiles => {
       store.setTestFiles(testFiles);
       const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
       store.setStatus(`Found ${testFiles.length} files with ${totalTests} tests`);
+    }).catch((err: any) => {
+      logError('discoverTests', err);
+      store.setStatus(`Discovery failed: ${err.message}`);
     });
   }, []);
 
@@ -82,6 +122,13 @@ export function App({ onSubmit }: AppProps) {
       const context = getCurrentAiContext();
       const response = await getAiSuggestion(prompt, context);
       store.setAiResponse(response);
+      const code = extractCodeFromResponse(response);
+      if (code) {
+        const diff = context.testSourceCode
+          ? contextDiff(computeLineDiff(context.testSourceCode, code))
+          : code.split('\n').map(content => ({ type: 'added' as const, content }));
+        store.setState({ aiCodeDiff: diff, aiDiffFilePath: context.testFilePath ?? null });
+      }
     } catch (error: any) {
       store.setAiResponse(`Error: ${error.message}`);
     } finally {
@@ -123,56 +170,73 @@ export function App({ onSubmit }: AppProps) {
 
   useKeypress(useCallback((key: KeypressEvent) => {
     try {
-    if (busyRef.current) return;
     const s = store.getState();
-    const TABS = s.mode === 'run' ? RUN_TABS : WRITE_TABS;
 
-    // Ctrl+C: exit
+    // Ctrl+C: always works
     if (key.ctrl && key.name === 'c') {
       exit();
       return;
     }
 
-    // AI response actions (Tab=Apply, Ctrl+S=Save)
-    if (s.mode === 'run' && s.aiResponse && !s.aiLoading) {
-      if (key.name === 'tab') {
-        const code = extractCodeFromResponse(s.aiResponse);
-        if (code) {
-          const existingCode = s.testCode;
-          const newCode = existingCode
-            ? existingCode + '\n\n// AI Generated:\n' + code
-            : '// AI Generated:\n' + code;
-          store.setTestCode(newCode);
-          store.setAiResponse('');
-          store.setMode('write');
-          store.setActiveTab('test');
-          store.setStatus('Code applied to Test tab');
+    // Escape to stop running tests: must be before busyRef check
+    if (key.name === 'escape' && s.isRunning) {
+      store.requestStop();
+      killCurrentTest();
+      store.setStatus('Stopping...');
+      return;
+    }
+
+    if (busyRef.current) return;
+    const TABS = s.mode === 'run' ? RUN_TABS : WRITE_TABS;
+
+    // Test filter active — navigation + close, all other keys go to TextInput
+    if (s.testFilterActive) {
+      if (key.name === 'escape' || key.name === 'return') {
+        store.setState({ testFilter: '', testFilterActive: false });
+        return;
+      }
+      if (s.panelFocus === 'tests' && (key.name === 'up' || key.name === 'down')) {
+        const filtered = getMatchingTestIndices(s.testFiles, s.testFilter);
+        if (filtered.length === 0) return;
+        const curPos = filtered.indexOf(s.testSelectionIndex);
+        if (key.name === 'up') {
+          store.setTestSelectionIndex(filtered[Math.max(0, curPos - 1)]!);
         } else {
-          store.setStatus('No code block found in response');
+          const next = curPos === -1 ? 0 : Math.min(filtered.length - 1, curPos + 1);
+          store.setTestSelectionIndex(filtered[next]!);
+        }
+        store.setActionScrollIndex(0);
+        store.setExpandedActionIndex(-1);
+        return;
+      }
+      return;
+    }
+
+    // AI diff actions: Enter=Save to file, Esc=Dismiss
+    if (s.mode === 'run' && s.aiCodeDiff && !s.aiLoading && !aiInputFocusedRef.current) {
+      if (key.name === 'return') {
+        const code = extractCodeFromResponse(s.aiResponse);
+        if (!code) { store.setStatus('No code block found'); return; }
+        const { selectedFile, selectedTestName, selectedTestLine } = findSelectedTest();
+        if (!selectedFile || selectedTestLine <= 0) { store.setStatus('No test selected'); return; }
+        const result = replaceTestInFile(selectedFile, selectedTestLine, code);
+        if (result.success) {
+          store.setAiResponse('');
+          store.setStatus(`Saved: "${selectedTestName}"`);
+          // Re-discover tests to pick up changes
+          const cwd = process.cwd();
+          discoverTests(cwd).then(testFiles => {
+            store.setTestFiles(testFiles);
+            const totalTests = testFiles.reduce((sum, f) => sum + f.tests.length, 0);
+            store.setStatus(`Saved. ${testFiles.length} files, ${totalTests} tests`);
+          }).catch(() => {});
+        } else {
+          store.setStatus(`Error: ${result.error}`);
         }
         return;
       }
-      if (key.ctrl && key.name === 's') {
-        const code = extractCodeFromResponse(s.aiResponse);
-        if (!code) { store.setStatus('No code block found in AI response'); return; }
-        const { selectedFile, selectedTestName, selectedTestLine } = findSelectedTest();
-        if (!selectedFile) { store.setStatus('No test file selected'); return; }
-        const isCompleteTest = code.trim().match(/^test\s*\(/);
-        if (isCompleteTest && selectedTestLine > 0) {
-          const result = replaceTestInFile(selectedFile, selectedTestLine, code);
-          if (result.success) {
-            store.setAiResponse('');
-            store.setStatus(`Test "${selectedTestName}" updated in ${selectedFile}`);
-          } else { store.setStatus(`Error: ${result.error}`); }
-        } else {
-          try {
-            const existingContent = fs.readFileSync(selectedFile, 'utf-8');
-            const wrappedCode = `\ntest('${selectedTestName ? `AI: ${selectedTestName}` : 'AI generated test'}', async ({ page }) => {\n${code.split('\n').map((l: string) => '  ' + l).join('\n')}\n});\n`;
-            fs.writeFileSync(selectedFile, existingContent + wrappedCode);
-            store.setAiResponse('');
-            store.setStatus(`New test added to ${selectedFile}`);
-          } catch (err: any) { store.setStatus(`Error: ${err.message}`); }
-        }
+      if (key.name === 'escape') {
+        store.setAiResponse('');
         return;
       }
     }
@@ -236,16 +300,10 @@ export function App({ onSubmit }: AppProps) {
       return;
     }
 
-    // Escape handling
+    // Escape handling (running case already handled above)
     if (key.name === 'escape') {
       if (aiInputFocusedRef.current) {
         handleAiFocusChange(false);
-        return;
-      }
-      if (s.isRunning) {
-        store.requestStop();
-        killCurrentTest();
-        store.setStatus('Stopping...');
         return;
       }
       if (s.aiResponse) {
@@ -260,9 +318,14 @@ export function App({ onSubmit }: AppProps) {
       return;
     }
 
-    // Activate AI input on printable character when in run mode idle
-    if (s.mode === 'run' && !s.isRunning && !aiInputFocusedRef.current) {
+    // Activate AI input on printable character in run mode
+    if (s.mode === 'run' && !aiInputFocusedRef.current) {
       if (!key.ctrl && !key.meta && key.sequence && key.sequence.length === 1 && key.sequence >= '!' && key.sequence <= '~') {
+        // '/' activates test filter when focus is on test list
+        if (key.sequence === '/' && s.panelFocus === 'tests') {
+          store.setState({ testFilterActive: true, testFilter: '' });
+          return;
+        }
         setAiInitialChar(key.sequence);
         aiInputFocusedRef.current = true;
         setAiInputFocused(true);
@@ -271,7 +334,7 @@ export function App({ onSubmit }: AppProps) {
     }
 
     // Run mode navigation (skip when typing in AI input)
-    if (s.mode === 'run' && !s.isRunning && !aiInputFocusedRef.current) {
+    if (s.mode === 'run' && !aiInputFocusedRef.current) {
       const totalItems = s.testFiles.reduce((sum, f) => sum + 1 + f.tests.length, 0);
 
       if ((key.name === 'right' && s.panelFocus === 'tests') || (key.name === 'left' && s.panelFocus === 'actions')) {
@@ -324,31 +387,43 @@ export function App({ onSubmit }: AppProps) {
           return;
         }
         if (key.ctrl && key.name === 'a') {
-          const totalTests = s.testFiles.reduce((sum, f) => sum + f.tests.length, 0);
           const selectedCount = Object.keys(s.selectedTests).length;
-          if (selectedCount === totalTests) store.clearTestSelection();
+          if (selectedCount > 0) store.clearTestSelection();
           else store.selectAllTests();
           return;
         }
-        if (key.name === 'return') {
-          busyRef.current = true;
+        if (key.name === 'return' && !s.isRunning) {
           store.setStatus('Starting tests...');
           runSelectedTests(process.cwd()).catch((error: any) => {
             store.setStatus(`Error: ${error.message}`);
             store.setIsRunning(false);
-          }).finally(() => { busyRef.current = false; });
+          });
           return;
         }
       } else {
         // Actions panel navigation (use filtered actions to match ActionPanel rendering)
         const selectedResult = getSelectedResult();
         const actions = selectedResult ? filterActions(selectedResult.actions) : [];
-        const actionsCount = actions.length;
-        const isActionExpanded = s.expandedActionIndex === s.actionScrollIndex;
+        const attachments = selectedResult?.attachments ?? [];
+        const actionsCount = actions.length + attachments.length;
+        const isInAttachmentRange = s.actionScrollIndex >= actions.length;
+        const isActionExpanded = !isInAttachmentRange && s.expandedActionIndex === s.actionScrollIndex;
         const inNetworkMode = s.actionDetailFocus === 'network';
-        const networkCount = actions[s.actionScrollIndex]?.network?.requests?.length || 0;
+        const inConsoleMode = s.actionDetailFocus === 'console';
+        const expandedAction = isInAttachmentRange ? undefined : actions[s.actionScrollIndex];
+        const networkCount = expandedAction?.network?.requests?.length || 0;
+        const consoleCount = expandedAction?.console?.length || 0;
 
-        if (inNetworkMode && isActionExpanded && networkCount > 0) {
+        if (inConsoleMode && isActionExpanded && consoleCount > 0) {
+          if (key.name === 'up') {
+            if (s.consoleScrollIndex > 0) store.setConsoleScrollIndex(s.consoleScrollIndex - 1);
+            else if (networkCount > 0) { store.setActionDetailFocus('network'); store.setNetworkScrollIndex(networkCount - 1); }
+            else store.setActionDetailFocus('actions');
+            return;
+          }
+          if (key.name === 'down') { store.setConsoleScrollIndex(Math.min(consoleCount - 1, s.consoleScrollIndex + 1)); return; }
+          if (key.name === 'escape') { store.setActionDetailFocus('actions'); store.setState({ consoleScrollIndex: 0 }); return; }
+        } else if (inNetworkMode && isActionExpanded && networkCount > 0) {
           const isNetworkExpanded = s.expandedNetworkIndex >= 0;
 
           if (isNetworkExpanded) {
@@ -370,7 +445,11 @@ export function App({ onSubmit }: AppProps) {
               else store.setActionDetailFocus('actions');
               return;
             }
-            if (key.name === 'down') { store.setNetworkScrollIndex(Math.min(networkCount - 1, s.networkScrollIndex + 1)); return; }
+            if (key.name === 'down') {
+              if (s.networkScrollIndex < networkCount - 1) { store.setNetworkScrollIndex(s.networkScrollIndex + 1); }
+              else if (consoleCount > 0) { store.setActionDetailFocus('console'); store.setConsoleScrollIndex(0); }
+              return;
+            }
             if (key.name === 'return' || key.name === 'space') { store.toggleExpandedNetwork(s.networkScrollIndex); return; }
             if (key.name === 'escape') { store.setActionDetailFocus('actions'); store.setExpandedNetworkIndex(-1); return; }
           }
@@ -380,6 +459,9 @@ export function App({ onSubmit }: AppProps) {
             if (isActionExpanded && networkCount > 0) {
               store.setActionDetailFocus('network');
               store.setNetworkScrollIndex(0);
+            } else if (isActionExpanded && consoleCount > 0) {
+              store.setActionDetailFocus('console');
+              store.setConsoleScrollIndex(0);
             } else {
               store.setActionScrollIndex(Math.min(actionsCount - 1, s.actionScrollIndex + 1));
               store.resetNetworkDetail();
@@ -387,6 +469,13 @@ export function App({ onSubmit }: AppProps) {
             return;
           }
           if (key.name === 'return' || key.name === 'space') {
+            // Attachment line: open the file
+            if (isInAttachmentRange) {
+              const attIdx = s.actionScrollIndex - actions.length;
+              const att = attachments[attIdx];
+              if (att) openFile(att.path);
+              return;
+            }
             store.toggleExpandedAction(s.actionScrollIndex);
             store.resetNetworkDetail();
             // Auto-expand single network request (skip double drill-down for API actions)
@@ -403,15 +492,39 @@ export function App({ onSubmit }: AppProps) {
     } catch (err) { logError('keypress handler', err); }
   }, [exit, inputMode, findSelectedTest, getSelectedResult]));
 
-  // Normal layout with content area
-  // Chrome: menubar(1) + inputbar(0-2) + statusbar(1) + content border(2) = 4-6
-  const inputBarLines = state.mode === 'write' ? 2 : state.isRunning ? 1 : 0;
-  const maxAiLines = Math.max(4, Math.floor(height * 0.25));
-  const aiBarHeight = state.mode === 'run' ? (
-    state.aiLoading ? 2 : state.aiResponse ? Math.min(maxAiLines, state.aiResponse.split('\n').length) + 2 : 0
-  ) + (!state.isRunning ? 2 : 0) : 0;
-  const topPad = 1;
-  const contentHeight = Math.max(5, height - (4 + inputBarLines + topPad) - aiBarHeight);
+  // Calculate content height from terminal height minus all chrome elements
+  // MenuBar: 1, marginTop: 1, border: 2 (top+bottom), StatusBar: 2 (hr+row)
+  const chromeLines = 1 + 1 + 2 + 2;
+
+  // InputBar: run mode not-running=0, run mode running=1, write mode=2
+  const inputBarLines = state.mode !== 'run' ? 2 : state.isRunning ? 1 : 0;
+
+  // AiBar: only shows in run mode
+  let aiBarLines = 0;
+  if (state.mode === 'run') {
+    const hasAiContent = state.aiLoading || state.aiResponse || !state.isRunning;
+    if (hasAiContent) {
+      const maxAiLines = Math.max(4, Math.floor(height * 0.25));
+      if (state.aiLoading) {
+        aiBarLines = 5;
+      } else if (state.aiCodeDiff) {
+        aiBarLines = Math.min(maxAiLines, state.aiCodeDiff.length) + 2;
+      } else if (state.aiResponse) {
+        aiBarLines = Math.min(maxAiLines, state.aiResponse.split('\n').length) + 2;
+      }
+      if (!state.isRunning) aiBarLines += 2; // hr + input
+    }
+  }
+
+  const contentHeight = Math.max(5, height - chromeLines - inputBarLines - aiBarLines);
+
+  // Debug layout — writes once per unique value change
+  const debugKey = `${height}|${contentHeight}|${chromeLines}|${inputBarLines}|${aiBarLines}`;
+  const debugRef = useRef('');
+  if (debugRef.current !== debugKey) {
+    debugRef.current = debugKey;
+    logError('LAYOUT', `terminal=${height}x${width} chrome=${chromeLines} input=${inputBarLines} ai=${aiBarLines} → content=${contentHeight} boxH=${contentHeight + 2}`);
+  }
 
   return (
     <Box flexDirection="column" width={width} height={height}>
@@ -422,7 +535,7 @@ export function App({ onSubmit }: AppProps) {
         inputMode={inputMode}
         onInputModeChange={setInputMode}
       />
-      <Box borderStyle="round" borderColor={state.isRunning ? colors.primary : colors.borderDim} paddingX={1} flexGrow={1} marginTop={topPad}>
+      <Box borderStyle="round" borderColor={state.isRunning ? colors.primary : colors.borderDim} paddingX={1} height={contentHeight + 2} marginTop={1}>
         <ContentArea maxLines={contentHeight} width={width - 4} />
       </Box>
       <AiBar onSubmitPrompt={handleAiPrompt} focused={aiInputFocused} onFocusChange={handleAiFocusChange} initialChar={aiInitialChar} height={height} />

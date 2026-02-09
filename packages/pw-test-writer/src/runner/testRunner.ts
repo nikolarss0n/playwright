@@ -9,8 +9,9 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
-import { store, TestFile, TestCase } from '../ui/store.js';
+import { store, TestFile, TestCase, type TestAttachment } from '../ui/store.js';
 import { startCaptureServer, stopCaptureServer, getCaptureEndpoint } from './captureServer.js';
+import { saveTestResult, loadHistory } from './history.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -43,7 +44,14 @@ export async function discoverTests(cwd: string): Promise<TestFile[]> {
       child.stdout?.on('data', (data) => { stdout += data.toString(); });
       child.stderr?.on('data', (data) => { stderr += data.toString(); });
 
+      // Timeout after 30 seconds
+      const discoveryTimeout = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('Test discovery timeout'));
+      }, 30000);
+
       child.on('close', (code) => {
+        clearTimeout(discoveryTimeout);
         // JSON reporter may output valid JSON even with non-zero exit
         // Try to parse stdout first
         if (stdout.trim().startsWith('{')) {
@@ -55,22 +63,18 @@ export async function discoverTests(cwd: string): Promise<TestFile[]> {
         }
       });
 
-      child.on('error', reject);
-
-      // Timeout after 30 seconds
-      setTimeout(() => {
-        child.kill('SIGTERM');
-        reject(new Error('Test discovery timeout'));
-      }, 30000);
+      child.on('error', (err) => {
+        clearTimeout(discoveryTimeout);
+        reject(err);
+      });
     });
 
     // Parse the JSON and extract tests
     return parsePlaywrightJson(result, cwd);
-  } catch (err) {
+  } catch (err: any) {
     // Fallback to glob-based discovery if Playwright command fails
-    if (process.env.DEBUG) {
-      console.error('Playwright test list failed, falling back to glob discovery:', err);
-    }
+    const fs2 = await import('fs');
+    try { fs2.appendFileSync('/tmp/pw-test-writer.log', `[${new Date().toISOString()}] discoverTests: npx failed (${err.message}), falling back to glob in ${cwd}\n`); } catch {}
     return discoverTestsWithGlob(cwd);
   }
 }
@@ -238,12 +242,18 @@ export function requestStop(): void {
 }
 
 /**
- * Kill currently running test
+ * Kill currently running test (SIGTERM then SIGKILL escalation)
  */
 export function killCurrentTest(): void {
   stopRequested = true;
   if (currentChild) {
-    currentChild.kill('SIGTERM');
+    const child = currentChild;
+    child.kill('SIGTERM');
+    // Escalate to SIGKILL if still alive after 5 seconds
+    const escalation = setTimeout(() => {
+      try { child.kill('SIGKILL'); } catch {}
+    }, 5000);
+    escalation.unref();
     currentChild = null;
   }
 }
@@ -336,16 +346,27 @@ export async function runSelectedTests(cwd: string): Promise<void> {
         // Update step status
         store.updateStep(stepId, result.success ? 'done' : 'error', result.success ? `${duration}ms` : result.error || 'Test failed');
 
+        const testStatus = result.success ? 'passed' : 'failed';
+
+        // Collect screenshots created during this test run
+        const attachments = collectScreenshots(cwd, startTime);
+
         // Record result with testKey
         store.addTestResult({
           file: file.relativePath,
           test: test.fullTitle,
           testKey,
-          status: result.success ? 'passed' : 'failed',
+          status: testStatus,
           duration,
           actions: [...store.getState().currentTestActions],
           error: result.success ? undefined : result.error,
+          ...(attachments.length > 0 ? { attachments } : {}),
         });
+
+        // Save to local history
+        try { saveTestResult(cwd, file.relativePath, line, testStatus, duration); } catch {}
+        // Refresh history in store
+        try { store.setState({ testHistory: loadHistory(cwd) }); } catch {}
 
         // Clear test timer
         store.clearTestTimer();
@@ -362,6 +383,8 @@ export async function runSelectedTests(cwd: string): Promise<void> {
         // Clear test timer
         store.clearTestTimer();
 
+        const attachments = collectScreenshots(cwd, startTime);
+
         store.addTestResult({
           file: file.relativePath,
           test: test.fullTitle,
@@ -370,7 +393,12 @@ export async function runSelectedTests(cwd: string): Promise<void> {
           duration,
           actions: [],
           error: error.message || 'Test error',
+          ...(attachments.length > 0 ? { attachments } : {}),
         });
+
+        // Save to local history
+        try { saveTestResult(cwd, file.relativePath, line, 'failed', duration); } catch {}
+        try { store.setState({ testHistory: loadHistory(cwd) }); } catch {}
 
         failed++;
       }
@@ -382,8 +410,7 @@ export async function runSelectedTests(cwd: string): Promise<void> {
   } catch (error: any) {
     store.setStatus(`Error: ${error.message}`);
   } finally {
-    // Stop capture server
-    stopCaptureServer();
+    try { stopCaptureServer(); } catch {}
   }
 
   store.setIsRunning(false);
@@ -443,7 +470,22 @@ async function runTestWithSpawn(
       stderr += data.toString();
     });
 
+    // Timeout after 2 minutes
+    const execTimeout = setTimeout(() => {
+      if (currentChild === child) {
+        child.kill('SIGTERM');
+        // Escalate to SIGKILL after 5 seconds
+        const escalation = setTimeout(() => {
+          try { child.kill('SIGKILL'); } catch {}
+        }, 5000);
+        escalation.unref();
+        currentChild = null;
+        resolve({ success: false, error: 'Test timeout (2 minutes)' });
+      }
+    }, 120000);
+
     child.on('close', (code) => {
+      clearTimeout(execTimeout);
       currentChild = null;
       const success = code === 0;
       let error: string | undefined;
@@ -464,40 +506,45 @@ async function runTestWithSpawn(
         const errorLines: string[] = [];
         let capturing = false;
 
-        for (const line of lines) {
-          const trimmed = line.trim();
+        for (let li = 0; li < lines.length; li++) {
+          const trimmed = lines[li].trim();
 
           if (!capturing && (
             trimmed.startsWith('Error:') ||
+            trimmed.startsWith('TimeoutError:') ||
             trimmed.startsWith('expect(') ||
             trimmed.startsWith('Expected:') ||
-            trimmed.startsWith('Received:')
+            trimmed.startsWith('Received:') ||
+            trimmed.match(/^Timeout \d+ms exceeded/) ||
+            trimmed.startsWith('waiting for') ||
+            trimmed.startsWith('Call log:')
           )) {
             capturing = true;
           }
 
           if (capturing) {
-            errorLines.push(line);
-            if (errorLines.length >= 50) {
-              break;
-            }
-            // Stop after 'at' location line, but keep going for
+            errorLines.push(lines[li]);
+            if (errorLines.length >= 50) break;
+            // Stop after stack trace line, but keep going for
             // Expected/Received/Call log sections
             if (trimmed.startsWith('at ') &&
-                !lines[lines.indexOf(line) + 1]?.trim().match(/^(Expected|Received|Call log|at )/)) {
+                !lines[li + 1]?.trim().match(/^(Expected|Received|Call log|at |waiting for|- )/)) {
               break;
             }
+            // Stop after Call log entries end
+            if (trimmed.startsWith('=') && errorLines.length > 2) break;
           }
         }
 
         if (errorLines.length > 0) {
           error = errorLines.join('\n');
         } else {
-          // Fallback: grab meaningful lines from end of output
+          // Fallback: filter reporter noise, keep error-relevant lines
+          const noise = /^\d+ (passed|failed|skipped)|^Running \d|^npx |^\[.+\] ›|^reports\/|^\s*$/;
           const meaningful = lines
             .map(l => l.trim())
-            .filter(l => l && !l.includes('Running') && !l.startsWith('npx'));
-          error = meaningful.slice(-5).join('\n') || `Exit code: ${code}`;
+            .filter(l => l && !noise.test(l));
+          error = meaningful.slice(-8).join('\n') || `Test failed with exit code ${code}`;
         }
       }
 
@@ -505,17 +552,36 @@ async function runTestWithSpawn(
     });
 
     child.on('error', (err) => {
+      clearTimeout(execTimeout);
       currentChild = null;
       resolve({ success: false, error: err.message });
     });
-
-    // Timeout after 2 minutes
-    setTimeout(() => {
-      if (currentChild === child) {
-        child.kill('SIGTERM');
-        currentChild = null;
-        resolve({ success: false, error: 'Test timeout (2 minutes)' });
-      }
-    }, 120000);
   });
+}
+
+/**
+ * Collect screenshot files from test-results/ created after startTime
+ */
+function collectScreenshots(cwd: string, startTime: number): TestAttachment[] {
+  const resultsDir = path.join(cwd, 'test-results');
+  if (!fs.existsSync(resultsDir)) return [];
+
+  const attachments: TestAttachment[] = [];
+  try {
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.name.endsWith('.png')) continue;
+        try {
+          const stat = fs.statSync(full);
+          if (stat.mtimeMs >= startTime) {
+            attachments.push({ name: entry.name, path: full, contentType: 'image/png' });
+          }
+        } catch {}
+      }
+    };
+    walk(resultsDir);
+  } catch {}
+  return attachments;
 }

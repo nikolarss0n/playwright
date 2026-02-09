@@ -3,6 +3,9 @@ import type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/s
 // Re-export for consumers that import these from store
 export type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/server/actionCaptureTypes';
 
+export type { HistoryEntry, TestHistory } from '../runner/history.js';
+export type { DiffLine } from '../ai/diff.js';
+
 // Simple state store (no external dependencies)
 export type TabId = 'steps' | 'pom' | 'business' | 'test' | 'network' | 'console' | 'tests';
 export type ModelId = 'haiku' | 'opus';
@@ -42,6 +45,12 @@ export interface TestCase {
   fullTitle: string;
 }
 
+export interface TestAttachment {
+  name: string;
+  path: string;
+  contentType: string;
+}
+
 export interface TestResult {
   file: string;
   test: string;
@@ -50,6 +59,7 @@ export interface TestResult {
   duration: number;
   actions: ActionCapture[];
   error?: string;
+  attachments?: TestAttachment[];
 }
 
 export type PanelFocus = 'tests' | 'actions';
@@ -98,11 +108,19 @@ export interface AppState {
   networkScrollIndex: number;   // Selected network request within action
   expandedNetworkIndex: number; // Expanded network request (-1 for none)
   responseScrollOffset: number; // Scroll offset for expanded response body
+  consoleScrollIndex: number;   // Selected console message within action
+  // Test filter
+  testFilter: string;
+  testFilterActive: boolean;
   // AI assistant
   aiPrompt: string;             // Current AI prompt input
   aiResponse: string;           // AI response/suggestion
   aiLoading: boolean;           // Whether AI is processing
   showAiPanel: boolean;         // Whether AI panel is visible
+  aiCodeDiff: import('../ai/diff.js').DiffLine[] | null;  // Computed diff lines
+  aiDiffFilePath: string | null;  // File being modified
+  // Test history
+  testHistory: Record<string, import('../runner/history.js').HistoryEntry[]>;
 }
 
 type Listener = () => void;
@@ -148,11 +166,19 @@ class Store {
     networkScrollIndex: 0,
     expandedNetworkIndex: -1,
     responseScrollOffset: 0,
+    consoleScrollIndex: 0,
+    // Test filter
+    testFilter: '',
+    testFilterActive: false,
     // AI assistant
     aiPrompt: '',
     aiResponse: '',
     aiLoading: false,
     showAiPanel: false,
+    aiCodeDiff: null,
+    aiDiffFilePath: null,
+    // Test history
+    testHistory: {},
   };
 
   private listeners: Set<Listener> = new Set();
@@ -285,7 +311,13 @@ class Store {
       consoleMessages: [],
       testResults: [],
       currentTestActions: [],
+      aiCodeDiff: null,
+      aiDiffFilePath: null,
     });
+  }
+
+  clearAiDiff() {
+    this.setState({ aiCodeDiff: null, aiDiffFilePath: null });
   }
 
   // Mode switching
@@ -454,6 +486,10 @@ class Store {
     this.setState({ responseScrollOffset: Math.max(0, offset) });
   }
 
+  setConsoleScrollIndex(index: number) {
+    this.setState({ consoleScrollIndex: index });
+  }
+
   // Reset network detail state when changing actions
   resetNetworkDetail() {
     this.setState({
@@ -461,6 +497,7 @@ class Store {
       networkScrollIndex: 0,
       expandedNetworkIndex: -1,
       responseScrollOffset: 0,
+      consoleScrollIndex: 0,
     });
   }
 
@@ -470,7 +507,7 @@ class Store {
   }
 
   setAiResponse(response: string) {
-    this.setState({ aiResponse: response });
+    this.setState({ aiResponse: response, ...(response === '' ? { aiCodeDiff: null, aiDiffFilePath: null } : {}) });
   }
 
   setAiLoading(loading: boolean) {

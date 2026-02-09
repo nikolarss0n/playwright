@@ -77,6 +77,7 @@ export interface AiContext {
   networkRequest?: NetworkRequestCapture;
   allActions?: ActionCapture[];
   testResult?: TestResult;
+  history?: Array<{ ts: number; s: string; d: number }>;
 }
 
 /**
@@ -101,35 +102,50 @@ export function extractCodeFromResponse(response: string): string | null {
 /**
  * Replace a test in a file with new code
  */
+const TEST_START_PATTERN = /^\s*test\s*(\.\w+\s*)?\(/;
+
 export function replaceTestInFile(filePath: string, testLine: number, newTestCode: string): { success: boolean; error?: string } {
   try {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
 
-    // Find the test start
+    // Find the test start (matches test(, test.skip(, test.only(, test.fixme(, etc.)
     let startLine = testLine - 1; // Convert to 0-indexed
-    while (startLine > 0 && !lines[startLine].match(/^\s*test\s*\(/)) {
+    while (startLine > 0 && !TEST_START_PATTERN.test(lines[startLine])) {
       startLine--;
     }
 
-    if (startLine < 0 || !lines[startLine].match(/^\s*test\s*\(/)) {
+    if (startLine < 0 || !TEST_START_PATTERN.test(lines[startLine])) {
       return { success: false, error: 'Could not find test start' };
     }
 
-    // Find the matching closing bracket
+    // Find the matching closing bracket (string/comment-aware)
     let braceCount = 0;
     let endLine = startLine;
     let foundOpen = false;
 
     for (let i = startLine; i < lines.length; i++) {
       const line = lines[i];
-      for (const char of line) {
-        if (char === '{') {
-          braceCount++;
-          foundOpen = true;
-        } else if (char === '}') {
-          braceCount--;
+      let j = 0;
+      while (j < line.length) {
+        const ch = line[j];
+        // Skip single-line comments
+        if (ch === '/' && line[j + 1] === '/') break;
+        // Skip string literals
+        if (ch === '\'' || ch === '"' || ch === '`') {
+          const quote = ch;
+          j++;
+          while (j < line.length) {
+            if (line[j] === '\\') { j += 2; continue; }
+            if (line[j] === quote) break;
+            j++;
+          }
+          j++;
+          continue;
         }
+        if (ch === '{') { braceCount++; foundOpen = true; }
+        else if (ch === '}') { braceCount--; }
+        j++;
       }
       if (foundOpen && braceCount === 0) {
         endLine = i;
@@ -167,6 +183,7 @@ CURRENT CONTEXT:
 - Page URL: ${context.action?.pageUrl || 'Unknown'}
 - Current action being viewed: ${context.action ? `${context.action.type}.${context.action.method}` : 'None'}
 - Network request being viewed: ${context.networkRequest ? `${context.networkRequest.method} ${context.networkRequest.url}` : 'None'}
+${context.history && context.history.length > 0 ? `- Test history (recent runs): ${context.history.slice(0, 10).map(h => `${h.s}(${(h.d / 1000).toFixed(1)}s)`).join(', ')}${context.history.filter(h => h.s === 'failed').length > 0 ? `\n- Flakiness: ${context.history.filter(h => h.s === 'failed').length}/${context.history.length} failures` : ''}` : ''}
 
 ${hasTestSource ? `CURRENT TEST SOURCE CODE:
 \`\`\`typescript
@@ -188,8 +205,20 @@ ${hasTestSource ? `
 - Use web-first assertions (expect(locator).toBeVisible(), etc.)
 `}
 
-When user says "this request" or "this action", they mean the one shown in the context above.
-For network assertions, use: await page.waitForResponse(url => url.includes('...'))
+NETWORK-AWARE TESTING:
+- You have access to all network requests captured during the test run (URLs, methods, status codes, request/response bodies)
+- Use this data to write precise assertions — assert on actual response values you can see, not guesses
+- For API response assertions, intercept with page.route() or capture with page.waitForResponse():
+  \`\`\`
+  const response = await page.waitForResponse(url => url.includes('/api/endpoint'));
+  const data = await response.json();
+  expect(data.field).toBe(expectedValue);
+  \`\`\`
+- For verifying requests were made: use page.waitForResponse() or page.waitForRequest()
+- For mocking API responses: use page.route() to intercept and fulfill with controlled data
+- Check response status codes: expect(response.status()).toBe(200)
+- When the user mentions "this request" or "this action", they mean the one shown in the context above
+- Use actual values from the captured response bodies to write concrete assertions, not placeholder values
 `;
 
   const contextDetails = buildContextDetails(context);
@@ -197,7 +226,7 @@ For network assertions, use: await page.waitForResponse(url => url.includes('...
   try {
     const response = await getClient().messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      max_tokens: 8192,
       system: systemPrompt,
       messages: [
         {
@@ -212,6 +241,33 @@ For network assertions, use: await page.waitForResponse(url => url.includes('...
   } catch (error: any) {
     return `Error: ${error.message}`;
   }
+}
+
+/** Check if a resource type represents an API/data request (not static assets). */
+function isApiResource(resourceType?: string): boolean {
+  if (!resourceType) return false;
+  return ['xhr', 'fetch', 'websocket', 'other'].includes(resourceType.toLowerCase());
+}
+
+/** Truncate a body string with indicator */
+function truncateBody(body: string, limit: number): string {
+  if (body.length <= limit) return body;
+  return body.slice(0, limit) + '\n... (truncated)';
+}
+
+/** Format a response body: pretty-print JSON if valid, detect language, truncate safely */
+function formatResponseBody(body: string, limit: number): { text: string; lang: string } {
+  let formatted = body;
+  let lang = 'text';
+  try {
+    const parsed = JSON.parse(body);
+    formatted = JSON.stringify(parsed, null, 2);
+    lang = 'json';
+  } catch {
+    // Check if it looks like HTML
+    if (body.trimStart().startsWith('<')) lang = 'html';
+  }
+  return { text: truncateBody(formatted, limit), lang };
 }
 
 function buildContextDetails(context: AiContext): string {
@@ -272,52 +328,90 @@ function buildContextDetails(context: AiContext): string {
       if (errors.length > 0) {
         parts.push(`\n**Console Errors (${errors.length}):**`);
         for (const err of errors.slice(0, 5)) {
-          parts.push(`- ${err.text.slice(0, 200)}`);
+          const text = err.text.length > 500 ? err.text.slice(0, 500) + '...' : err.text;
+          const loc = err.location ? ` (${err.location})` : '';
+          parts.push(`- ${text}${loc}`);
         }
       }
       if (warnings.length > 0) {
         parts.push(`\n**Console Warnings (${warnings.length}):**`);
         for (const w of warnings.slice(0, 3)) {
-          parts.push(`- ${w.text.slice(0, 200)}`);
+          const text = w.text.length > 500 ? w.text.slice(0, 500) + '...' : w.text;
+          parts.push(`- ${text}`);
         }
       }
     }
   }
 
   if (context.networkRequest) {
-    parts.push(`\n**Network Request:**`);
+    parts.push(`\n**Focused Network Request:**`);
     parts.push(`- ${context.networkRequest.method} ${context.networkRequest.url}`);
     parts.push(`- Status: ${context.networkRequest.status ?? 'pending'}`);
     if (context.networkRequest.resourceType) {
       parts.push(`- Type: ${context.networkRequest.resourceType}`);
     }
     if (context.networkRequest.requestPostData) {
-      parts.push(`- Request Body:\n\`\`\`json\n${context.networkRequest.requestPostData.slice(0, 500)}\n\`\`\``);
+      const limit = isApiResource(context.networkRequest.resourceType) ? 2000 : 500;
+      parts.push(`- Request Body:\n\`\`\`json\n${truncateBody(context.networkRequest.requestPostData, limit)}\n\`\`\``);
     }
     if (context.networkRequest.responseBody) {
-      parts.push(`- Response Body:\n\`\`\`json\n${context.networkRequest.responseBody.slice(0, 1000)}\n\`\`\``);
+      const limit = isApiResource(context.networkRequest.resourceType) ? 3000 : 1000;
+      const { text, lang } = formatResponseBody(context.networkRequest.responseBody, limit);
+      parts.push(`- Response Body:\n\`\`\`${lang}\n${text}\n\`\`\``);
     }
+  }
+
+  if (context.history && context.history.length > 0) {
+    const passes = context.history.filter(h => h.s === 'passed').length;
+    const fails = context.history.filter(h => h.s === 'failed').length;
+    parts.push(`\n**Test History (last ${context.history.length} runs):** ${passes} passed, ${fails} failed`);
+    parts.push(context.history.slice(0, 5).map(h =>
+      `- ${h.s} (${(h.d / 1000).toFixed(1)}s) — ${new Date(h.ts * 1000).toLocaleDateString()}`
+    ).join('\n'));
+    parts.push('');
   }
 
   if (context.allActions && context.allActions.length > 0) {
     parts.push(`\n**All Actions in this test (${context.allActions.length}):**`);
-    for (const action of context.allActions.slice(0, 10)) {
+    for (const action of context.allActions.slice(0, 15)) {
       const status = action.error ? '✗' : '✓';
-      parts.push(`- ${status} ${action.type}.${action.method} (${action.timing?.durationMs || '?'}ms)`);
+      const netSummary = action.network?.requests?.length
+        ? ` [${action.network.requests.length} req]`
+        : '';
+      parts.push(`- ${status} ${action.type}.${action.method}${netSummary} (${action.timing?.durationMs || '?'}ms)`);
     }
-    if (context.allActions.length > 10) {
-      parts.push(`- ... and ${context.allActions.length - 10} more`);
+    if (context.allActions.length > 15) {
+      parts.push(`- ... and ${context.allActions.length - 15} more`);
     }
 
-    const failedRequests = context.allActions
-      .flatMap(a => a.network?.requests || [])
-      .filter(r => r.status && r.status >= 400);
-    if (failedRequests.length > 0) {
+    // Collect all network requests across all actions
+    const allRequests = context.allActions.flatMap(a => a.network?.requests || []);
+    const apiRequests = allRequests.filter(r => isApiResource(r.resourceType));
+    const failedRequests = allRequests.filter(r => r.status && r.status >= 400);
+
+    if (apiRequests.length > 0) {
+      parts.push(`\n**API Requests (${apiRequests.length} total):**`);
+      for (const r of apiRequests.slice(0, 10)) {
+        const statusIcon = !r.status ? '⏳' : r.status >= 400 ? '✗' : '✓';
+        parts.push(`- ${statusIcon} ${r.method} ${r.url} → ${r.status ?? 'pending'} (${r.durationMs}ms)`);
+        if (r.requestPostData) {
+          parts.push(`  Request: ${truncateBody(r.requestPostData, 500)}`);
+        }
+        if (r.responseBody) {
+          parts.push(`  Response: ${truncateBody(r.responseBody, 1500)}`);
+        }
+      }
+      if (apiRequests.length > 10) {
+        parts.push(`- ... and ${apiRequests.length - 10} more API requests`);
+      }
+    }
+
+    if (failedRequests.length > 0 && apiRequests.length === 0) {
       parts.push(`\n**Failed Network Requests:**`);
       for (const r of failedRequests.slice(0, 5)) {
         parts.push(`- ${r.method} ${r.url} → ${r.status}`);
         if (r.responseBody) {
-          parts.push(`  Response: ${r.responseBody.slice(0, 200)}`);
+          parts.push(`  Response: ${r.responseBody.slice(0, 500)}`);
         }
       }
     }
@@ -334,30 +428,41 @@ function extractTestSource(filePath: string, testLine: number): string | undefin
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split('\n');
 
-    // Find the test start (should be around testLine)
+    // Find the test start (matches test(, test.skip(, test.only(, etc.)
     let startLine = testLine - 1; // Convert to 0-indexed
-    while (startLine > 0 && !lines[startLine].match(/^\s*test\s*\(/)) {
+    while (startLine > 0 && !TEST_START_PATTERN.test(lines[startLine])) {
       startLine--;
     }
 
-    if (startLine < 0 || !lines[startLine].match(/^\s*test\s*\(/)) {
+    if (startLine < 0 || !TEST_START_PATTERN.test(lines[startLine])) {
       return undefined;
     }
 
-    // Find the matching closing bracket
+    // Find the matching closing bracket (string/comment-aware)
     let braceCount = 0;
     let endLine = startLine;
     let foundOpen = false;
 
     for (let i = startLine; i < lines.length; i++) {
       const line = lines[i];
-      for (const char of line) {
-        if (char === '{') {
-          braceCount++;
-          foundOpen = true;
-        } else if (char === '}') {
-          braceCount--;
+      let j = 0;
+      while (j < line.length) {
+        const ch = line[j];
+        if (ch === '/' && line[j + 1] === '/') break;
+        if (ch === '\'' || ch === '"' || ch === '`') {
+          const quote = ch;
+          j++;
+          while (j < line.length) {
+            if (line[j] === '\\') { j += 2; continue; }
+            if (line[j] === quote) break;
+            j++;
+          }
+          j++;
+          continue;
         }
+        if (ch === '{') { braceCount++; foundOpen = true; }
+        else if (ch === '}') { braceCount--; }
+        j++;
       }
       if (foundOpen && braceCount === 0) {
         endLine = i;
@@ -424,6 +529,11 @@ export function getCurrentAiContext(): AiContext {
     ? currentAction.network.requests[state.networkScrollIndex] || currentAction.network.requests[0]
     : undefined;
 
+  // Look up history for this test
+  const selectedFile = state.testFiles.find(f => f.path === selectedFilePath);
+  const historyKey = selectedFile ? `${selectedFile.relativePath}:${selectedTestLine}` : '';
+  const history = historyKey ? state.testHistory[historyKey] : undefined;
+
   return {
     testName: selectedTestName,
     testFilePath: selectedFilePath,
@@ -433,5 +543,6 @@ export function getCurrentAiContext(): AiContext {
     networkRequest,
     allActions,
     testResult,
+    history,
   };
 }

@@ -150,21 +150,43 @@ export function formatJsonFull(jsonStr: string, maxWidth: number): string[] {
   }
 }
 
+// Lines that are reporter noise, not actual error content
+const NOISE = /^\d+ (passed|failed|skipped)|^Running \d|^npx |^\[.+\] ›|^reports\//;
+// Separator lines: repeated ─, ═, -, =, or _ (at least 3 chars)
+const SEPARATOR = /^[─═\-=_]{3,}$/;
+
 export function formatTestError(error: string, maxWidth: number, maxLines: number): string[] {
   const lines: string[] = [];
   const errorLines = error.split('\n');
   for (const raw of errorLines) {
     if (lines.length >= maxLines) break;
     const trimmed = raw.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith('Error:')) lines.push(chalk.hex(colors.error).bold(trimmed.slice(0, maxWidth)));
-    else if (trimmed.startsWith('Expected:')) { const val = trimmed.replace('Expected:', '').trim(); lines.push(chalk.hex(colors.success)('  Expected: ') + chalk.hex(colors.success).bold(val)); }
-    else if (trimmed.startsWith('Received:')) { const val = trimmed.replace('Received:', '').trim(); lines.push(chalk.hex(colors.error)('  Received: ') + chalk.hex(colors.error).bold(val)); }
-    else if (trimmed.startsWith('>')) lines.push(chalk.hex(colors.error)('  ' + trimmed.slice(0, maxWidth - 4)));
-    else if (trimmed.match(/^\d+\s*\|/)) lines.push(chalk.hex(colors.textDim)('  ' + trimmed.slice(0, maxWidth - 4)));
-    else if (trimmed.match(/^\|?\s*\^/)) lines.push(chalk.hex(colors.error)('  ' + trimmed.slice(0, maxWidth - 4)));
-    else if (trimmed.startsWith('at ')) lines.push(chalk.hex(colors.textMuted)('  ' + trimmed.slice(0, maxWidth - 4)));
-    else lines.push(chalk.hex(colors.error)('  ' + trimmed.slice(0, maxWidth - 4)));
+    if (!trimmed || NOISE.test(trimmed) || SEPARATOR.test(trimmed)) continue;
+
+    if (trimmed.startsWith('Error:') || trimmed.startsWith('TimeoutError:'))
+      lines.push(chalk.hex(colors.error).bold(trimmed.slice(0, maxWidth)));
+    else if (trimmed.match(/^Timeout \d+ms exceeded/))
+      lines.push(chalk.hex(colors.error).bold(trimmed.slice(0, maxWidth)));
+    else if (trimmed.startsWith('Expected:'))
+      { const val = trimmed.replace('Expected:', '').trim(); lines.push(chalk.hex(colors.success)('  Expected: ') + chalk.hex(colors.success).bold(val.slice(0, maxWidth - 14))); }
+    else if (trimmed.startsWith('Received:'))
+      { const val = trimmed.replace('Received:', '').trim(); lines.push(chalk.hex(colors.error)('  Received: ') + chalk.hex(colors.error).bold(val.slice(0, maxWidth - 14))); }
+    else if (trimmed.startsWith('Call log:'))
+      lines.push(chalk.hex(colors.textDim)('  Call log:'));
+    else if (trimmed.startsWith('- waiting for') || trimmed.startsWith('waiting for'))
+      lines.push(chalk.hex(colors.warning)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else if (trimmed.startsWith('-  ') || trimmed.startsWith('- '))
+      lines.push(chalk.hex(colors.textDim)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else if (trimmed.startsWith('>'))
+      lines.push(chalk.hex(colors.error)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else if (trimmed.match(/^\d+\s*\|/))
+      lines.push(chalk.hex(colors.textDim)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else if (trimmed.match(/^\|?\s*\^/))
+      lines.push(chalk.hex(colors.error)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else if (trimmed.startsWith('at '))
+      lines.push(chalk.hex(colors.textMuted)('  ' + trimmed.slice(0, maxWidth - 4)));
+    else
+      lines.push(chalk.hex(colors.text)('  ' + trimmed.slice(0, maxWidth - 4)));
   }
   return lines;
 }

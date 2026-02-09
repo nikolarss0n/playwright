@@ -20,17 +20,27 @@ export function renderNetworkDetail(
   const networkFocused = inNetworkMode && focusRight;
 
   const allRequests = requests;
-  const completedRequests = allRequests.filter(r => r.status !== null);
-  const pendingRequests = allRequests.filter(r => r.status === null);
+  const totalRequests = allRequests.length;
 
-  const requestsToShow = [
-    ...completedRequests.slice(0, 15),
-    ...(pendingRequests.length > 0 && completedRequests.length < 10 ? pendingRequests.slice(0, 5) : []),
-  ];
+  // Compute scroll window for network requests
+  const maxVisibleRequests = Math.max(3, maxRemainingLines - 8);
+  const needsNetScroll = totalRequests > maxVisibleRequests;
+  let netScrollStart = 0;
+  if (needsNetScroll) {
+    netScrollStart = Math.max(0, Math.min(
+      state.networkScrollIndex - Math.floor(maxVisibleRequests / 3),
+      totalRequests - maxVisibleRequests,
+    ));
+  }
+  const requestsToShow = allRequests.slice(netScrollStart, netScrollStart + maxVisibleRequests);
 
-  for (let ri = 0; ri < requestsToShow.length && lines.length < maxRemainingLines - 6; ri++) {
+  if (needsNetScroll && netScrollStart > 0) {
+    lines.push(th.textDim(`    ▲ ${netScrollStart} more`));
+  }
+
+  for (let ri = 0; ri < requestsToShow.length && lines.length < maxRemainingLines - 4; ri++) {
     const req = requestsToShow[ri]!;
-    const originalIndex = allRequests.indexOf(req);
+    const originalIndex = netScrollStart + ri;
     const isNetSelected = networkFocused && state.networkScrollIndex === originalIndex;
     const isNetExpanded = state.expandedNetworkIndex === originalIndex;
     const isPending = req.status === null;
@@ -119,15 +129,13 @@ export function renderNetworkDetail(
     }
   }
 
-  // Summary of hidden requests
-  const hiddenCompleted = Math.max(0, completedRequests.length - 15);
-  const hiddenPending = pendingRequests.length - (completedRequests.length < 10 ? Math.min(5, pendingRequests.length) : 0);
-  if (hiddenCompleted > 0 || hiddenPending > 0) {
-    let hiddenText = '    ';
-    if (hiddenCompleted > 0) hiddenText += `+${hiddenCompleted} more`;
-    if (hiddenCompleted > 0 && hiddenPending > 0) hiddenText += ', ';
-    if (hiddenPending > 0) hiddenText += chalk.hex(colors.warning)(`+${hiddenPending} pending`);
-    lines.push(th.textDim(hiddenText));
+  // Summary of items below scroll window
+  const belowCount = totalRequests - netScrollStart - requestsToShow.length;
+  if (needsNetScroll && belowCount > 0) {
+    const pendingBelow = allRequests.slice(netScrollStart + requestsToShow.length).filter(r => r.status === null).length;
+    let belowText = `    ▼ ${belowCount} more`;
+    if (pendingBelow > 0) belowText += chalk.hex(colors.warning)(` (${pendingBelow} pending)`);
+    lines.push(th.textDim(belowText));
   }
 
   return lines;

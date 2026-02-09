@@ -6,7 +6,7 @@ import { useStore } from '../../hooks/useStore.js';
 import { renderNetworkDetail } from './NetworkDetail.js';
 import { formatTestError } from '../shared/JsonPreview.js';
 import { formatTime } from '../shared/ProgressIndicator.js';
-import type { TestResult, ActionCapture } from '../../store.js';
+import type { TestResult, TestAttachment, ActionCapture } from '../../store.js';
 
 const stripAnsi = (str: string) => str.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
 const visualWidth = (str: string) => stripAnsi(str).length;
@@ -19,8 +19,8 @@ const getSpinner = (): string => {
 };
 
 interface ActionNameParts {
-  prefix: string;    // e.g. "goto ", "expect(selector).", "click "
-  highlight: string; // colored in orange — e.g. URL, matcher, expected text
+  prefix: string;
+  highlight: string;
 }
 
 function formatActionName(action: { type: string; method: string; title?: string; params?: any }): ActionNameParts {
@@ -49,6 +49,11 @@ export function filterActions(actions: ActionCapture[]): ActionCapture[] {
   return actions.filter(a => !(a.type === 'BrowserContext' && (a.method === 'newPage' || a.method === 'close')));
 }
 
+interface PanelLine {
+  text: string;
+  actionIdx: number; // -1 for spacers/non-action lines
+}
+
 interface ActionPanelProps {
   selectedResult: TestResult | null;
   selectedTestName: string;
@@ -60,7 +65,7 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
   const state = useStore(s => s);
   const focusRight = state.panelFocus === 'actions';
 
-  const lines: string[] = [];
+  const allLines: PanelLine[] = [];
 
   const title = selectedTestName ? selectedTestName.slice(0, width - 5) : 'Actions';
   const expandedAction = (selectedResult && state.expandedActionIndex >= 0)
@@ -69,55 +74,50 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
   const expandedNetReq = inNetworkMode && state.expandedNetworkIndex >= 0
     ? expandedAction?.network?.requests?.[state.expandedNetworkIndex] : null;
 
-  lines.push(th.primaryBright.bold(title));
+  allLines.push({ text: th.primaryBright.bold(title), actionIdx: -1 });
+  allLines.push({ text: '', actionIdx: -1 });
 
   if (!selectedResult || selectedResult.actions.length === 0) {
     if (selectedResult?.status === 'running') {
       const { progress } = state;
       if (progress.currentAction) {
-        lines.push(`${getSpinner()} ${th.warning(progress.currentAction)}`);
-        if (progress.waitingFor) lines.push(th.textDim(`  ${chars.last} waiting for ${progress.waitingFor}...`));
+        allLines.push({ text: `${getSpinner()} ${th.warning(progress.currentAction)}`, actionIdx: -1 });
+        if (progress.waitingFor) allLines.push({ text: th.textDim(`  ${chars.last} waiting for ${progress.waitingFor}...`), actionIdx: -1 });
         if (progress.actionStartTime) {
           const actionElapsed = Date.now() - progress.actionStartTime;
-          if (actionElapsed > 500) lines.push(th.textDim(`  ${chars.last} ${formatTime(actionElapsed)} elapsed`));
+          if (actionElapsed > 500) allLines.push({ text: th.textDim(`  ${chars.last} ${formatTime(actionElapsed)} elapsed`), actionIdx: -1 });
         }
       } else {
-        // Loading skeleton
-        lines.push(`${getSpinner()} ${th.running('Running test...')}`);
-        lines.push('');
-        lines.push(skeleton(Math.min(width - 4, 30)));
-        lines.push(skeleton(Math.min(width - 4, 22)));
-        lines.push(skeleton(Math.min(width - 4, 26)));
+        allLines.push({ text: `${getSpinner()} ${th.running('Running test...')}`, actionIdx: -1 });
+        allLines.push({ text: '', actionIdx: -1 });
+        allLines.push({ text: skeleton(Math.min(width - 4, 30)), actionIdx: -1 });
+        allLines.push({ text: skeleton(Math.min(width - 4, 22)), actionIdx: -1 });
+        allLines.push({ text: skeleton(Math.min(width - 4, 26)), actionIdx: -1 });
       }
     } else if (selectedResult?.status === 'failed' && selectedResult?.error) {
-      lines.push(chalk.hex(colors.error).bold(`${chars.cross} Test Failed`));
-      lines.push('');
-      lines.push(...formatTestError(selectedResult.error, width - 2, 15));
+      allLines.push({ text: chalk.hex(colors.error).bold(`${chars.cross} Test Failed`), actionIdx: -1 });
+      allLines.push({ text: '', actionIdx: -1 });
+      for (const line of formatTestError(selectedResult.error, width - 2, 15)) {
+        allLines.push({ text: line, actionIdx: -1 });
+      }
     } else if (selectedTestName) {
-      lines.push(th.textDim('No actions captured for this test.'));
-      lines.push(th.textDim('Run the test to see actions.'));
+      allLines.push({ text: th.textDim('No actions captured for this test.'), actionIdx: -1 });
+      allLines.push({ text: th.textDim('Run the test to see actions.'), actionIdx: -1 });
     } else {
-      lines.push(th.textDim('Select a test to see its actions.'));
-      lines.push(th.textDim('Use ↑ ↓ to navigate, Enter to run.'));
+      allLines.push({ text: th.textDim('Select a test to see its actions.'), actionIdx: -1 });
+      allLines.push({ text: th.textDim('Use ↑ ↓ to navigate, Enter to run.'), actionIdx: -1 });
     }
   } else {
     const actions = filterActions(selectedResult.actions);
-    const scrollStart = Math.max(0, state.actionScrollIndex - Math.floor((maxLines - 4) / 4));
 
-    const totalActions = actions.length;
-    const visibleActions = maxLines - 4;
-    const needsScroll = totalActions > visibleActions;
-
-    for (let i = scrollStart; i < actions.length && lines.length < maxLines - 2; i++) {
+    for (let i = 0; i < actions.length; i++) {
       const action = actions[i]!;
       const isExpanded = state.expandedActionIndex === i;
       const isActionSelected = focusRight && state.actionScrollIndex === i;
-      const isCompleted = !isExpanded && !isActionSelected && action.timing?.durationMs;
       const actionIcon = action.error ? chalk.hex(colors.error)(chars.cross) : chalk.hex(colors.success)(chars.check);
       const netCount = action.network?.requests?.length || 0;
       const conCount = action.console?.length || 0;
       const errCount = action.console?.filter((c: { type: string }) => c.type === 'error').length || 0;
-      // Inline badges: network and console counts
       const badges: string[] = [];
       if (netCount > 0) badges.push(th.secondary(`⇅${netCount}`));
       if (errCount > 0) badges.push(chalk.hex(colors.error)(`●${errCount}`));
@@ -126,19 +126,14 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
       const badgeVisualLen = badges.length > 0 ? 1 + badges.reduce((s, b) => s + stripAnsi(b).length + 1, -1) : 0;
 
       const durationStr = action.timing?.durationMs ? `${Math.round(action.timing.durationMs)}ms` : '';
-      // Budget: " ✓ " (3) + " " before duration (1) + duration + badges + " ▸" (2) + scrollbar (1)
       const overhead = 3 + 1 + durationStr.length + badgeVisualLen + 2 + 1;
       const maxNameLen = Math.max(10, width - overhead);
       const { prefix, highlight } = formatActionName(action);
       const fullName = prefix + highlight;
       const truncName = fullName.length > maxNameLen ? fullName.slice(0, maxNameLen - 1) + '…' : fullName;
-      // Apply colors after truncation: highlight part gets orange
       const truncPrefix = truncName.slice(0, Math.min(prefix.length, truncName.length));
       const truncHighlight = truncName.slice(prefix.length);
-      const dim = isCompleted && !isActionSelected;
-      const coloredName = dim
-        ? th.textMuted(truncPrefix) + (truncHighlight ? th.textMuted(truncHighlight) : '')
-        : truncPrefix + (truncHighlight ? th.primary(truncHighlight) : '');
+      const coloredName = th.textSecondary(truncPrefix) + (truncHighlight ? th.primary(truncHighlight) : '');
       const duration = durationStr ? th.textDim(durationStr) : '';
 
       const expandHint = isExpanded
@@ -147,17 +142,11 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
       const inner = ` ${actionIcon} ${coloredName} ${duration}${badgeStr}`;
       const rowContent = inner + expandHint;
 
-      // Scrollbar indicator on right edge
-      const scrollMark = needsScroll ? getScrollChar(i - scrollStart, visibleActions, totalActions, scrollStart) : '';
+      const rowBg = isActionSelected ? chalk.bgHex(colors.selectBg) : (s: string) => s;
+      allLines.push({ text: rowBg(padEndVisual(rowContent, width - 1)), actionIdx: i });
 
-      if (isActionSelected) {
-        lines.push(th.selected(padEndVisual(rowContent, width - 2)) + scrollMark);
-      } else {
-        lines.push(padEndVisual(rowContent, width - 2) + scrollMark);
-      }
-
-      if (!isExpanded && lines.length < maxLines - 2) {
-        lines.push('');
+      if (!isExpanded) {
+        allLines.push({ text: '', actionIdx: -1 });
       }
 
       if (isExpanded) {
@@ -167,76 +156,152 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
 
         if (hasNetwork) {
           const netReqCount = action.network.requests.length;
-          // Skip divider + collapsed row for single-request actions (auto-expanded)
           if (netReqCount === 1 && state.expandedNetworkIndex === 0) {
-            lines.push(...renderNetworkDetail(action.network.requests, state, width, maxLines - lines.length, focusRight));
+            for (const line of renderNetworkDetail(action.network.requests, state, width, 50, focusRight)) {
+              allLines.push({ text: line, actionIdx: -1 });
+            }
           } else {
-            lines.push(divider('Network', netReqCount, width - 4));
-            lines.push(...renderNetworkDetail(action.network.requests, state, width, maxLines - lines.length, focusRight));
+            allLines.push({ text: divider('Network', netReqCount, width - 4), actionIdx: -1 });
+            for (const line of renderNetworkDetail(action.network.requests, state, width, 50, focusRight)) {
+              allLines.push({ text: line, actionIdx: -1 });
+            }
           }
         }
 
         if (hasConsole) {
-          const errCount = action.console.filter((c: { type: string }) => c.type === 'error').length;
-          const warnCount = action.console.filter((c: { type: string }) => c.type === 'warn').length;
-          lines.push(divider('Console', action.console.length, width - 4));
-          if (errCount > 0) lines.push(chalk.hex(colors.error)(`  ${errCount} errors`));
-          if (warnCount > 0) lines.push(chalk.hex(colors.warning)(`  ${warnCount} warnings`));
-          for (const msg of action.console.slice(0, 3)) {
-            const color = msg.type === 'error' ? chalk.hex(colors.error) : msg.type === 'warn' ? chalk.hex(colors.warning) : chalk.hex(colors.textDim);
-            lines.push(`    ${color(msg.text.slice(0, width - 6))}`);
+          const consoleErrCount = action.console.filter((c: { type: string }) => c.type === 'error').length;
+          const consoleWarnCount = action.console.filter((c: { type: string }) => c.type === 'warn').length;
+          const inConsoleMode = state.actionDetailFocus === 'console';
+          const consoleFocused = inConsoleMode && focusRight;
+          allLines.push({ text: divider('Console', action.console.length, width - 4), actionIdx: -1 });
+          if (consoleErrCount > 0) allLines.push({ text: chalk.hex(colors.error)(`  ${consoleErrCount} errors`), actionIdx: -1 });
+          if (consoleWarnCount > 0) allLines.push({ text: chalk.hex(colors.warning)(`  ${consoleWarnCount} warnings`), actionIdx: -1 });
+
+          const totalConsole = action.console.length;
+          const maxVisibleConsole = Math.max(3, maxLines - 3);
+          const needsConsoleScroll = totalConsole > maxVisibleConsole;
+          let consoleStart = 0;
+          if (needsConsoleScroll) {
+            consoleStart = Math.max(0, Math.min(
+              state.consoleScrollIndex - Math.floor(maxVisibleConsole / 3),
+              totalConsole - maxVisibleConsole,
+            ));
           }
-          lines.push(th.borderDim('─'.repeat(width - 4)));
+          if (needsConsoleScroll && consoleStart > 0) {
+            allLines.push({ text: th.textDim(`    ▲ ${consoleStart} more`), actionIdx: -1 });
+          }
+          const consoleSlice = action.console.slice(consoleStart, consoleStart + maxVisibleConsole);
+          for (let ci = 0; ci < consoleSlice.length; ci++) {
+            const msg = consoleSlice[ci]!;
+            const consoleIdx = consoleStart + ci;
+            const color = msg.type === 'error' ? chalk.hex(colors.error) : msg.type === 'warn' ? chalk.hex(colors.warning) : chalk.hex(colors.textDim);
+            const msgLine = `    ${color(msg.text.slice(0, width - 6))}`;
+            if (consoleFocused && state.consoleScrollIndex === consoleIdx) {
+              allLines.push({ text: chalk.bgHex(colors.selectBg)(padEndVisual(msgLine, width - 1)), actionIdx: -1 });
+            } else {
+              allLines.push({ text: msgLine, actionIdx: -1 });
+            }
+          }
+          const consoleBelow = totalConsole - consoleStart - consoleSlice.length;
+          if (needsConsoleScroll && consoleBelow > 0) {
+            allLines.push({ text: th.textDim(`    ▼ ${consoleBelow} more`), actionIdx: -1 });
+          }
+          allLines.push({ text: th.borderDim('─'.repeat(width - 4)), actionIdx: -1 });
         }
 
         if (hasDiff && action.snapshot.diff) {
-          lines.push(divider('DOM', undefined, width - 4));
-          lines.push(`  ${action.snapshot.diff.summary}`);
-          if (action.snapshot.diff.added.length > 0) lines.push(chalk.hex(colors.success)(`    + ${action.snapshot.diff.added.slice(0, 2).join(', ')}`));
-          if (action.snapshot.diff.removed.length > 0) lines.push(chalk.hex(colors.error)(`    - ${action.snapshot.diff.removed.slice(0, 2).join(', ')}`));
+          allLines.push({ text: divider('DOM', undefined, width - 4), actionIdx: -1 });
+          allLines.push({ text: `  ${action.snapshot.diff.summary}`, actionIdx: -1 });
+          if (action.snapshot.diff.added.length > 0) allLines.push({ text: chalk.hex(colors.success)(`    + ${action.snapshot.diff.added.slice(0, 2).join(', ')}`), actionIdx: -1 });
+          if (action.snapshot.diff.removed.length > 0) allLines.push({ text: chalk.hex(colors.error)(`    - ${action.snapshot.diff.removed.slice(0, 2).join(', ')}`), actionIdx: -1 });
         }
 
-        lines.push('');
+        allLines.push({ text: '', actionIdx: -1 });
       }
     }
 
     // Running action at end
     if (selectedResult.status === 'running' && state.progress.currentAction) {
-      lines.push('');
-      lines.push(`${getSpinner()} ${th.warning(state.progress.currentAction)}`);
-      if (state.progress.waitingFor) lines.push(th.textDim(`  ${chars.last} waiting for ${state.progress.waitingFor}...`));
+      allLines.push({ text: '', actionIdx: -1 });
+      allLines.push({ text: `${getSpinner()} ${th.warning(state.progress.currentAction)}`, actionIdx: -1 });
+      if (state.progress.waitingFor) allLines.push({ text: th.textDim(`  ${chars.last} waiting for ${state.progress.waitingFor}...`), actionIdx: -1 });
       if (state.progress.actionStartTime) {
         const actionElapsed = Date.now() - state.progress.actionStartTime;
-        if (actionElapsed > 500) lines.push(th.textDim(`  ${chars.last} ${formatTime(actionElapsed)} elapsed`));
+        if (actionElapsed > 500) allLines.push({ text: th.textDim(`  ${chars.last} ${formatTime(actionElapsed)} elapsed`), actionIdx: -1 });
       }
     }
 
     // Error at end
     if (selectedResult.status === 'failed' && selectedResult.error) {
-      lines.push('');
-      lines.push(chalk.hex(colors.error).bold(`${chars.cross} Test Failed`));
-      lines.push(...formatTestError(selectedResult.error, width - 2, 10));
+      allLines.push({ text: '', actionIdx: -1 });
+      allLines.push({ text: chalk.hex(colors.error).bold(`${chars.cross} Test Failed`), actionIdx: -1 });
+      for (const line of formatTestError(selectedResult.error, width - 2, 10)) {
+        allLines.push({ text: line, actionIdx: -1 });
+      }
+    }
+
+    // Screenshots section
+    if (selectedResult.attachments && selectedResult.attachments.length > 0) {
+      allLines.push({ text: '', actionIdx: -1 });
+      allLines.push({ text: th.borderDim('── Screenshots ──'), actionIdx: -1 });
+      for (let ai = 0; ai < selectedResult.attachments.length; ai++) {
+        const att = selectedResult.attachments[ai]!;
+        const attachIdx = actions.length + ai;
+        const isFocused = focusRight && state.actionScrollIndex === attachIdx;
+        const hint = isFocused ? th.textDim(' Space to open') : '';
+        const icon = th.primary('■');
+        const row = ` ${icon} ${th.textSecondary(att.name)}${hint}`;
+        if (isFocused) {
+          allLines.push({ text: chalk.bgHex(colors.selectBg)(padEndVisual(row, width - 1)), actionIdx: attachIdx });
+        } else {
+          allLines.push({ text: row, actionIdx: attachIdx });
+        }
+      }
     }
   }
 
-  while (lines.length < maxLines) lines.push('');
+  // Compute scroll window centered on selected action (same pattern as TestList)
+  const selectedLineIdx = allLines.findIndex(l => l.actionIdx === state.actionScrollIndex);
+  const totalLines = allLines.length;
+  const needsScroll = totalLines > maxLines;
+
+  let scrollStart = 0;
+  if (needsScroll) {
+    if (selectedResult?.status === 'running') {
+      // Auto-follow: keep the latest action/progress visible at the bottom
+      scrollStart = Math.max(0, totalLines - maxLines);
+    } else if (selectedLineIdx >= 0) {
+      scrollStart = Math.max(0, Math.min(
+        selectedLineIdx - Math.floor(maxLines / 3),
+        totalLines - maxLines,
+      ));
+    }
+  }
+
+  const visibleLines = allLines.slice(scrollStart, scrollStart + maxLines);
+
+  // Pad to fill available space
+  while (visibleLines.length < maxLines) {
+    visibleLines.push({ text: '', actionIdx: -1 });
+  }
 
   return (
-    <Box flexDirection="column">
-      {lines.slice(0, maxLines).map((line, i) => (
-        <Text key={i}>{line}</Text>
-      ))}
+    <Box flexDirection="column" height={maxLines}>
+      {visibleLines.map((line, i) => {
+        const scrollMark = needsScroll ? getScrollChar(i, maxLines, totalLines, scrollStart) : '';
+        const padded = scrollMark ? padEndVisual(line.text, width - 1) + scrollMark : line.text;
+        return <Text key={i}>{padded}</Text>;
+      })}
     </Box>
   );
 }
 
-function getScrollChar(visibleIdx: number, visibleCount: number, totalCount: number, _scrollStart: number): string {
+function getScrollChar(visibleIdx: number, visibleCount: number, totalCount: number, scrollStart: number): string {
   if (totalCount <= visibleCount) return '';
-  const thumbSize = Math.max(1, Math.floor(visibleCount * visibleCount / totalCount));
-  const thumbStart = Math.floor(visibleIdx * visibleCount / totalCount);
+  const thumbSize = Math.max(1, Math.round(visibleCount * visibleCount / totalCount));
+  const thumbStart = Math.round(scrollStart * visibleCount / totalCount);
   if (visibleIdx >= thumbStart && visibleIdx < thumbStart + thumbSize) {
     return th.textMuted(chars.scrollbar);
   }
-  return th.borderDim(' ');
+  return ' ';
 }
-
