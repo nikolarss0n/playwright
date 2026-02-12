@@ -95,11 +95,17 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
         allLines.push({ text: skeleton(Math.min(width - 4, 26)), actionIdx: -1 });
       }
     } else if (selectedResult?.status === 'failed' && selectedResult?.error) {
-      allLines.push({ text: chalk.hex(colors.error).bold(`${chars.cross} Test Failed`), actionIdx: -1 });
-      allLines.push({ text: '', actionIdx: -1 });
-      for (const line of formatTestError(selectedResult.error, width - 2, 15)) {
-        allLines.push({ text: line, actionIdx: -1 });
+      const errBorder = chalk.hex(colors.error);
+      const boxW = width - 4;
+      const errBoxLine = (content: string) =>
+        errBorder(`  │`) + padEndVisual(` ${content}`, boxW - 2) + errBorder(`│`);
+      allLines.push({ text: errBorder(`  ╭${'─'.repeat(boxW - 2)}╮`), actionIdx: -1 });
+      allLines.push({ text: errBoxLine(chalk.hex(colors.error).bold(`${chars.cross} Test Failed`)), actionIdx: -1 });
+      allLines.push({ text: errBorder(`  ├${'─'.repeat(boxW - 2)}┤`), actionIdx: -1 });
+      for (const line of formatTestError(selectedResult.error, boxW - 4, 15)) {
+        allLines.push({ text: errBoxLine(line), actionIdx: -1 });
       }
+      allLines.push({ text: errBorder(`  ╰${'─'.repeat(boxW - 2)}╯`), actionIdx: -1 });
     } else if (selectedTestName) {
       allLines.push({ text: th.textDim('No actions captured for this test.'), actionIdx: -1 });
       allLines.push({ text: th.textDim('Run the test to see actions.'), actionIdx: -1 });
@@ -231,32 +237,48 @@ export function ActionPanel({ selectedResult, selectedTestName, width, maxLines 
       }
     }
 
-    // Error at end
+    // Error at end — bordered box
     if (selectedResult.status === 'failed' && selectedResult.error) {
+      const errBorder = chalk.hex(colors.error);
+      const boxW = width - 4;
+      const errBoxLine = (content: string) =>
+        errBorder(`  │`) + padEndVisual(` ${content}`, boxW - 2) + errBorder(`│`);
+
       allLines.push({ text: '', actionIdx: -1 });
-      allLines.push({ text: chalk.hex(colors.error).bold(`${chars.cross} Test Failed`), actionIdx: -1 });
-      for (const line of formatTestError(selectedResult.error, width - 2, 10)) {
-        allLines.push({ text: line, actionIdx: -1 });
+      allLines.push({ text: errBorder(`  ╭${'─'.repeat(boxW - 2)}╮`), actionIdx: -1 });
+      allLines.push({ text: errBoxLine(chalk.hex(colors.error).bold(`${chars.cross} Test Failed`)), actionIdx: -1 });
+      allLines.push({ text: errBorder(`  ├${'─'.repeat(boxW - 2)}┤`), actionIdx: -1 });
+      for (const line of formatTestError(selectedResult.error, boxW - 4, 10)) {
+        allLines.push({ text: errBoxLine(line), actionIdx: -1 });
       }
+      allLines.push({ text: errBorder(`  ╰${'─'.repeat(boxW - 2)}╯`), actionIdx: -1 });
     }
 
-    // Screenshots section
+    // Screenshots section — bordered box
     if (selectedResult.attachments && selectedResult.attachments.length > 0) {
+      const attBorder = chalk.hex(colors.primary);
+      const boxW = width - 4;
+      const attBoxLine = (content: string) =>
+        attBorder(`  │`) + padEndVisual(` ${content}`, boxW - 2) + attBorder(`│`);
+
       allLines.push({ text: '', actionIdx: -1 });
-      allLines.push({ text: th.borderDim('── Screenshots ──'), actionIdx: -1 });
+      allLines.push({ text: attBorder(`  ╭${'─'.repeat(boxW - 2)}╮`), actionIdx: -1 });
+      allLines.push({ text: attBoxLine(chalk.hex(colors.primary).bold(`Screenshots (${selectedResult.attachments.length})`)), actionIdx: -1 });
+      allLines.push({ text: attBorder(`  ├${'─'.repeat(boxW - 2)}┤`), actionIdx: -1 });
       for (let ai = 0; ai < selectedResult.attachments.length; ai++) {
         const att = selectedResult.attachments[ai]!;
         const attachIdx = actions.length + ai;
         const isFocused = focusRight && state.actionScrollIndex === attachIdx;
-        const hint = isFocused ? th.textDim(' Space to open') : '';
-        const icon = th.primary('■');
-        const row = ` ${icon} ${th.textSecondary(att.name)}${hint}`;
+        const hint = isFocused ? th.textDim(' ⏎ open') : '';
+        const icon = chalk.hex(colors.primary)('■');
+        const content = `${icon} ${th.textSecondary(att.name)}${hint}`;
         if (isFocused) {
-          allLines.push({ text: chalk.bgHex(colors.selectBg)(padEndVisual(row, width - 1)), actionIdx: attachIdx });
+          allLines.push({ text: attBorder(`  │`) + chalk.bgHex(colors.selectBg)(padEndVisual(` ${content}`, boxW - 2)) + attBorder(`│`), actionIdx: attachIdx });
         } else {
-          allLines.push({ text: row, actionIdx: attachIdx });
+          allLines.push({ text: attBoxLine(content), actionIdx: attachIdx });
         }
       }
+      allLines.push({ text: attBorder(`  ╰${'─'.repeat(boxW - 2)}╯`), actionIdx: -1 });
     }
   }
 

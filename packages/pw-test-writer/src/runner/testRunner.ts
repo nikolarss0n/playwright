@@ -9,7 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
-import { store, TestFile, TestCase, type TestAttachment } from '../ui/store.js';
+import { store, TestFile, TestCase, type TestAttachment, type ActionCapture } from '../ui/store.js';
 import { startCaptureServer, stopCaptureServer, getCaptureEndpoint } from './captureServer.js';
 import { saveTestResult, loadHistory } from './history.js';
 
@@ -348,8 +348,10 @@ export async function runSelectedTests(cwd: string): Promise<void> {
 
         const testStatus = result.success ? 'passed' : 'failed';
 
-        // Collect screenshots created during this test run
+        // Collect screenshots from test-results/ and from captured action params
         const attachments = collectScreenshots(cwd, startTime);
+        const capturedActions = store.getState().currentTestActions;
+        collectActionScreenshots(capturedActions, cwd, attachments);
 
         // Record result with testKey
         store.addTestResult({
@@ -358,7 +360,7 @@ export async function runSelectedTests(cwd: string): Promise<void> {
           testKey,
           status: testStatus,
           duration,
-          actions: [...store.getState().currentTestActions],
+          actions: [...capturedActions],
           error: result.success ? undefined : result.error,
           ...(attachments.length > 0 ? { attachments } : {}),
         });
@@ -384,6 +386,7 @@ export async function runSelectedTests(cwd: string): Promise<void> {
         store.clearTestTimer();
 
         const attachments = collectScreenshots(cwd, startTime);
+        collectActionScreenshots(store.getState().currentTestActions, cwd, attachments);
 
         store.addTestResult({
           file: file.relativePath,
@@ -560,28 +563,49 @@ async function runTestWithSpawn(
 }
 
 /**
- * Collect screenshot files from test-results/ created after startTime
+ * Collect Playwright failure screenshots created after startTime.
+ * Searches the project tree (excluding node_modules) for test-failed-*.png files.
  */
 function collectScreenshots(cwd: string, startTime: number): TestAttachment[] {
-  const resultsDir = path.join(cwd, 'test-results');
-  if (!fs.existsSync(resultsDir)) return [];
-
   const attachments: TestAttachment[] = [];
-  try {
-    const walk = (dir: string) => {
+  const seenPaths = new Set<string>();
+
+  const walkForScreenshots = (dir: string, depth = 0) => {
+    if (depth > 4 || !fs.existsSync(dir)) return;
+    try {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (entry.name === 'node_modules' || entry.name === '.git') continue;
         const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { walk(full); continue; }
-        if (!entry.name.endsWith('.png')) continue;
+        if (entry.isDirectory()) { walkForScreenshots(full, depth + 1); continue; }
+        // Match Playwright's failure screenshot pattern: test-failed-N.png
+        if (!entry.name.match(/^test-failed.*\.png$/)) continue;
+        if (seenPaths.has(full)) continue;
         try {
           const stat = fs.statSync(full);
           if (stat.mtimeMs >= startTime) {
+            seenPaths.add(full);
             attachments.push({ name: entry.name, path: full, contentType: 'image/png' });
           }
         } catch {}
       }
-    };
-    walk(resultsDir);
-  } catch {}
+    } catch {}
+  };
+
+  walkForScreenshots(cwd);
   return attachments;
+}
+
+/**
+ * Extract screenshot paths from captured Page.screenshot actions
+ */
+function collectActionScreenshots(actions: ActionCapture[], cwd: string, attachments: TestAttachment[]): void {
+  for (const action of actions) {
+    if (action.method !== 'screenshot') continue;
+    const filePath = action.params?.path;
+    if (!filePath || typeof filePath !== 'string') continue;
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(cwd, filePath);
+    if (!fs.existsSync(resolved)) continue;
+    if (attachments.some(a => a.path === resolved)) continue;
+    attachments.push({ name: path.basename(resolved), path: resolved, contentType: 'image/png' });
+  }
 }

@@ -535,7 +535,7 @@ export function App({ onSubmit }: AppProps) {
         inputMode={inputMode}
         onInputModeChange={setInputMode}
       />
-      <Box borderStyle="round" borderColor={state.isRunning ? colors.primary : colors.borderDim} paddingX={1} height={contentHeight + 2} marginTop={1}>
+      <Box borderStyle="round" borderColor={colors.borderDim} paddingX={1} height={contentHeight + 2} marginTop={1}>
         <ContentArea maxLines={contentHeight} width={width - 4} />
       </Box>
       <AiBar onSubmitPrompt={handleAiPrompt} focused={aiInputFocused} onFocusChange={handleAiFocusChange} initialChar={aiInitialChar} height={height} />

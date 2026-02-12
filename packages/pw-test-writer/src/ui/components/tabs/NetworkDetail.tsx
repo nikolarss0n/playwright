@@ -56,15 +56,20 @@ export function renderNetworkDetail(
     const durationText = !isPending && req.durationMs ? th.textDim(` ${req.durationMs.toFixed(0)}ms`) : '';
     const urlSpace = rightWidth - 22 - req.method.length - (durationText ? 8 : 0);
     const urlDisplay = req.url.length > urlSpace ? req.url.slice(0, urlSpace - 3) + '...' : req.url;
-    const methodStr = isPending ? th.textDim(req.method) : status >= 400 ? statusColor.bold(req.method) : th.textDim(req.method);
+    const methodColors: Record<string, string> = {
+      GET: colors.success, POST: colors.warning, PUT: colors.warning,
+      PATCH: colors.warning, DELETE: colors.error,
+    };
+    const mColor = methodColors[req.method] || colors.textDim;
+    const methodStr = isPending ? th.textDim(req.method) : chalk.hex(mColor).bold(req.method);
     const urlStr = isPending ? th.textDim(urlDisplay) : status >= 400 ? statusColor(urlDisplay) : th.textDim(urlDisplay);
-    const statusStr = isPending ? chalk.hex(colors.warning)('...') : status >= 400 ? statusColor(statusText) : th.textDim(statusText);
+    const statusStr = isPending ? chalk.hex(colors.warning)('...') : statusColor(statusText);
     let reqLine = `    ${expandIcon} ${methodStr} ${statusStr} ${urlStr}${durationText}`;
 
     if (isNetSelected) {
       lines.push(th.selected(padEndVisual(reqLine, rightWidth - 1)));
     } else {
-      lines.push(isPending ? th.textDim(reqLine) : reqLine);
+      lines.push(reqLine);
     }
 
     if (isNetExpanded) {
