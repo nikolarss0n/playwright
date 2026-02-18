@@ -1,0 +1,280 @@
+/**
+ * Copyright (c) Microsoft Corporation.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+import * as idbKeyval from 'idb-keyval';
+
+import { splitProgress } from './progress';
+import { unwrapPopoutUrl } from './snapshotRenderer';
+import { SnapshotServer } from './snapshotServer';
+import { TraceModel } from './traceModel';
+import { FetchTraceModelBackend, TraceViewerServer, ZipTraceModelBackend } from './traceModelBackends';
+import { TraceVersionError } from './traceModernizer';
+
+// @ts-ignore
+declare const self: ServiceWorkerGlobalScope;
+
+self.addEventListener('install', function(event: any) {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', function(event: any) {
+  event.waitUntil(self.clients.claim());
+});
+
+const scopePath = new URL(self.registration.scope).pathname;
+const loadedTraces = new Map<string, { traceModel: TraceModel, snapshotServer: SnapshotServer }>();
+const clientIdToTraceUrls = new Map<string, { limit: number | undefined, traceUrls: Set<string>, traceViewerServer: TraceViewerServer }>();
+
+function simulateServiceWorkerRestart() {
+  loadedTraces.clear();
+  clientIdToTraceUrls.clear();
+}
+
+async function loadTrace(traceUrl: string, traceFileName: string | null, client: any | undefined, limit: number | undefined, progress: (done: number, total: number) => undefined): Promise<TraceModel> {
+  await gc();
+  const clientId = client?.id ?? '';
+  let data = clientIdToTraceUrls.get(clientId);
+  if (!data) {
+    const clientURL = new URL(client?.url ?? self.registration.scope);
+    const traceViewerServerBaseUrl = new URL(clientURL.searchParams.get('server') ?? '../', clientURL);
+    data = { limit, traceUrls: new Set(), traceViewerServer: new TraceViewerServer(traceViewerServerBaseUrl) };
+    clientIdToTraceUrls.set(clientId, data);
+  }
+  data.traceUrls.add(traceUrl);
+  await saveClientIdParams();
+
+  const traceModel = new TraceModel();
+  try {
+    // Allow 10% to hop from sw to page.
+    const [fetchProgress, unzipProgress] = splitProgress(progress, [0.5, 0.4, 0.1]);
+    const backend = traceUrl.endsWith('json') ? new FetchTraceModelBackend(traceUrl, data.traceViewerServer) : new ZipTraceModelBackend(traceUrl, data.traceViewerServer, fetchProgress);
+    await traceModel.load(backend, unzipProgress);
+  } catch (error: any) {
+    // eslint-disable-next-line no-console
+    console.error(error);
+    if (error?.message?.includes('Cannot find .trace file') && await traceModel.hasEntry('index.html'))
+      throw new Error('Could not load trace. Did you upload a Playwright HTML report instead? Make sure to extract the archive first and then double-click the index.html file or put it on a web server.');
+    if (error instanceof TraceVersionError)
+      throw new Error(`Could not load trace from ${traceFileName || traceUrl}. ${error.message}`);
+    if (traceFileName)
+      throw new Error(`Could not load trace from ${traceFileName}. Make sure to upload a valid Playwright trace.`);
+    throw new Error(`Could not load trace from ${traceUrl}. Make sure a valid Playwright Trace is accessible over this url.`);
+  }
+  const snapshotServer = new SnapshotServer(traceModel.storage(), sha1 => traceModel.resourceForSha1(sha1));
+  loadedTraces.set(traceUrl, { traceModel, snapshotServer });
+  return traceModel;
+}
+
+// @ts-ignore
+async function doFetch(event: FetchEvent): Promise<Response> {
+  // In order to make Accessibility Insights for Web work.
+  if (event.request.url.startsWith('chrome-extension://'))
+    return fetch(event.request);
+
+  if (event.request.headers.get('x-pw-serviceworker') === 'forward') {
+    const request = new Request(event.request);
+    request.headers.delete('x-pw-serviceworker');
+    return fetch(request);
+  }
+
+  const request = event.request;
+  const client = await self.clients.get(event.clientId);
+
+  const urlInScope = request.url.startsWith(self.registration.scope) ? new URL(unwrapPopoutUrl(request.url)) : undefined;
+  const relativePath = urlInScope?.pathname.substring(scopePath.length - 1);
+
+  if (relativePath !== '/contexts' && !clientIdToTraceUrls.has(event.clientId)) {
+    // Service worker was restarted upon subresource fetch.
+    // It was stopped because ping did not keep it alive since the tab itself was throttled.
+    const params = await loadClientIdParams(event.clientId);
+    if (params) {
+      for (const traceUrl of params.traceUrls)
+        await loadTrace(traceUrl, null, client, params.limit, () => {});
+    }
+  }
+
+  // When trace viewer is deployed over https, we will force upgrade
+  // insecure http subresources to https. Otherwise, these will fail
+  // to load inside our https snapshots.
+  // In this case, we also match http resources from the archive by
+  // the https urls.
+  const isDeployedAsHttps = self.registration.scope.startsWith('https://');
+
+  if (urlInScope && relativePath) {
+    if (relativePath === '/ping') {
+      await gc();
+      return new Response(null, { status: 200 });
+    }
+    if (relativePath === '/restartServiceWorker') {
+      simulateServiceWorkerRestart();
+      return new Response(null, { status: 200 });
+    }
+
+    const traceUrl = urlInScope.searchParams.get('trace');
+
+    if (relativePath === '/contexts') {
+      try {
+        const limit = urlInScope.searchParams.has('limit') ? +urlInScope.searchParams.get('limit')! : undefined;
+        const traceModel = await loadTrace(traceUrl!, urlInScope.searchParams.get('traceFileName'), client, limit, (done: number, total: number) => {
+          client.postMessage({ method: 'progress', params: { done, total } });
+        });
+        return new Response(JSON.stringify(traceModel!.contextEntries), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      } catch (error: any) {
+        return new Response(JSON.stringify({ error: error?.message }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+    }
+
+    if (relativePath.startsWith('/snapshotInfo/')) {
+      const { snapshotServer } = loadedTraces.get(traceUrl!) || {};
+      if (!snapshotServer)
+        return new Response(null, { status: 404 });
+      const pageOrFrameId = relativePath.substring('/snapshotInfo/'.length);
+      return snapshotServer.serveSnapshotInfo(pageOrFrameId, urlInScope.searchParams);
+    }
+
+    if (relativePath.startsWith('/snapshot/')) {
+      const { snapshotServer } = loadedTraces.get(traceUrl!) || {};
+      if (!snapshotServer)
+        return new Response(null, { status: 404 });
+      const pageOrFrameId = relativePath.substring('/snapshot/'.length);
+      const response = snapshotServer.serveSnapshot(pageOrFrameId, urlInScope.searchParams, urlInScope.href);
+      if (isDeployedAsHttps)
+        response.headers.set('Content-Security-Policy', 'upgrade-insecure-requests');
+      return response;
+    }
+
+    if (relativePath.startsWith('/closest-screenshot/')) {
+      const { snapshotServer } = loadedTraces.get(traceUrl!) || {};
+      if (!snapshotServer)
+        return new Response(null, { status: 404 });
+      const pageOrFrameId = relativePath.substring('/closest-screenshot/'.length);
+      return snapshotServer.serveClosestScreenshot(pageOrFrameId, urlInScope.searchParams);
+    }
+
+    if (relativePath.startsWith('/sha1/')) {
+      // Sha1 for sources is based on the file path, can't load it of a random model.
+      const sha1 = relativePath.slice('/sha1/'.length);
+      for (const trace of loadedTraces.values()) {
+        const blob = await trace.traceModel.resourceForSha1(sha1);
+        if (blob)
+          return new Response(blob, { status: 200, headers: downloadHeaders(urlInScope.searchParams) });
+      }
+      return new Response(null, { status: 404 });
+    }
+
+    if (relativePath.startsWith('/file/')) {
+      const path = urlInScope.searchParams.get('path')!;
+      const traceViewerServer = clientIdToTraceUrls.get(event.clientId ?? '')?.traceViewerServer;
+      if (!traceViewerServer)
+        throw new Error('client is not initialized');
+      const response = await traceViewerServer.readFile(path);
+      if (!response)
+        return new Response(null, { status: 404 });
+      return response;
+    }
+
+    // Fallback for static assets.
+    return fetch(event.request);
+  }
+
+  const snapshotUrl = unwrapPopoutUrl(client!.url);
+  const traceUrl = new URL(snapshotUrl).searchParams.get('trace')!;
+  const { snapshotServer } = loadedTraces.get(traceUrl) || {};
+  if (!snapshotServer)
+    return new Response(null, { status: 404 });
+
+  const lookupUrls = [request.url];
+  if (isDeployedAsHttps && request.url.startsWith('https://'))
+    lookupUrls.push(request.url.replace(/^https/, 'http'));
+  return snapshotServer.serveResource(lookupUrls, request.method, snapshotUrl);
+}
+
+function downloadHeaders(searchParams: URLSearchParams): Headers | undefined {
+  const name = searchParams.get('dn');
+  const contentType = searchParams.get('dct');
+  if (!name)
+    return;
+  const headers = new Headers();
+  headers.set('Content-Disposition', `attachment; filename="attachment"; filename*=UTF-8''${encodeURIComponent(name)}`);
+  if (contentType)
+    headers.set('Content-Type', contentType);
+  return headers;
+}
+
+async function gc() {
+  const clients = await self.clients.matchAll();
+  const usedTraces = new Set<string>();
+
+  for (const [clientId, data] of clientIdToTraceUrls) {
+    // @ts-ignore
+    if (!clients.find(c => c.id === clientId)) {
+      clientIdToTraceUrls.delete(clientId);
+      continue;
+    }
+    if (data.limit !== undefined) {
+      const ordered = [...data.traceUrls];
+      // Leave the newest requested traces.
+      data.traceUrls = new Set(ordered.slice(ordered.length - data.limit));
+    }
+    data.traceUrls.forEach(url => usedTraces.add(url));
+  }
+
+  for (const traceUrl of loadedTraces.keys()) {
+    if (!usedTraces.has(traceUrl))
+      loadedTraces.delete(traceUrl);
+  }
+
+  await saveClientIdParams();
+}
+
+// Persist clientIdToTraceUrls to localStorage to avoid losing it when the service worker is restarted.
+async function saveClientIdParams() {
+  const serialized: Record<string, {
+    limit: number | undefined,
+    traceUrls: string[]
+  }> = {};
+  for (const [clientId, data] of clientIdToTraceUrls) {
+    serialized[clientId] = {
+      limit: data.limit,
+      traceUrls: [...data.traceUrls]
+    };
+  }
+
+  const newValue = JSON.stringify(serialized);
+  const oldValue = await idbKeyval.get('clientIdToTraceUrls');
+  if (newValue === oldValue)
+    return;
+  idbKeyval.set('clientIdToTraceUrls', newValue);
+}
+
+async function loadClientIdParams(clientId: string): Promise<{ limit: number | undefined, traceUrls: string[] } | undefined> {
+  const serialized = await idbKeyval.get('clientIdToTraceUrls') as string | undefined;
+  if (!serialized)
+    return;
+  const deserialized = JSON.parse(serialized);
+  return deserialized[clientId];
+}
+
+// @ts-ignore
+self.addEventListener('fetch', function(event: FetchEvent) {
+  event.respondWith(doFetch(event));
+});

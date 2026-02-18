@@ -1,0 +1,414 @@
+/*
+  Copyright (c) Microsoft Corporation.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
+.action-title {
+  align-items: center;
+}
+
+.action-title > .vbox > .hbox {
+  align-items: center;
+}
+
+.action-title-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-title-selector {
+  text-overflow: ellipsis;
+  overflow: hidden;
+  color: var(--vscode-tab-inactiveForeground);
+  margin-top: -8px;
+}
+
+.action-title-method {
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-title-param {
+  color: var(--vscode-editorBracketHighlight-foreground1);
+}
+
+.action-location {
+  display: flex;
+  flex: none;
+  margin: 0 4px;
+  color: var(--vscode-foreground);
+}
+
+.action-location > span {
+  margin: 0 4px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.action-duration {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  margin: 0 4px;
+  padding: 2px 6px;
+  background: rgba(230, 81, 0, 0.1);
+  border-radius: 4px;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  min-width: 70px;
+  min-height: 50px;
+  font-variant-numeric: tabular-nums;
+}
+
+.action-duration .codicon-loading {
+  animation: spin 1s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.5));
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.action-skipped {
+  margin-right: 6px;
+  opacity: 0.7;
+}
+
+.action-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding-right: 6px;
+  font-size: 14px;
+}
+
+.action-icon .codicon-error {
+  color: #ff4757;
+  filter: drop-shadow(0 0 2px rgba(255, 71, 87, 0.3));
+}
+
+.action-icon .codicon-warning {
+  color: #ffa502;
+  filter: drop-shadow(0 0 2px rgba(255, 165, 2, 0.3));
+}
+
+.action-icons {
+  flex: none;
+  display: flex;
+  flex-direction: row;
+  cursor: pointer;
+  height: 24px;
+  padding: 2px 6px;
+  position: relative;
+  border-radius: 6px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.action-icons:hover {
+  background-color: rgba(230, 81, 0, 0.15);
+  border: 1px solid rgba(230, 81, 0, 0.4);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(230, 81, 0, 0.2);
+}
+
+.action-icons:hover .codicon {
+  transform: scale(1.1);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.action-error {
+  color: #ff096c;
+  position: relative;
+  margin-right: 4px;
+  flex: none;
+  font-weight: 600;
+}
+
+.action-parameter {
+  display: inline;
+  flex: none;
+  padding-left: 5px;
+}
+
+.action-locator-parameter {
+  color: var(--vscode-charts-orange);
+}
+
+.action-generic-parameter {
+  color: var(--vscode-charts-purple);
+}
+
+.action-url {
+  display: inline;
+  flex: none;
+  padding-left: 5px;
+  color: var(--vscode-charts-blue);
+}
+
+.action-list-show-all {
+  display: flex;
+  cursor: pointer;
+  height: 32px;
+  align-items: center;
+  padding: 4px 8px;
+  margin: 4px;
+  border-radius: 6px;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  font-weight: 500;
+}
+
+.action-list-show-all:hover {
+  background-color: var(--vscode-list-hoverBackground);
+  color: #e65100;
+  transform: translateX(-2px);
+}
+
+.action-list-show-all .codicon {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.action-list-show-all:hover .codicon {
+  transform: translateX(-3px);
+}
+
+/* Hook styling - before/after hooks */
+.list-view-entry[data-testid*="before"],
+.list-view-entry[data-testid*="after"],
+.tree-view-entry[data-testid*="before"],
+.tree-view-entry[data-testid*="after"] {
+  background: linear-gradient(90deg, rgba(230, 81, 0, 0.05) 0%, transparent 100%);
+  border: 1px solid rgba(230, 81, 0, 0.2);
+  font-style: italic;
+  opacity: 0.85;
+  position: relative;
+}
+
+/* Ensure action title in hooks behaves like the arrow - no flex grow */
+.list-view-entry[data-testid*="before"] .action-title,
+.list-view-entry[data-testid*="after"] .action-title,
+.tree-view-entry[data-testid*="before"] .action-title,
+.tree-view-entry[data-testid*="after"] .action-title {
+  flex: none;
+}
+
+/* Orange HR line below before hooks */
+.list-view-entry[data-testid*="before"]:last-of-type::after,
+.tree-view-entry[data-testid*="before"]:last-of-type::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(230, 81, 0, 0.7) 20%, rgba(230, 81, 0, 0.7) 80%, transparent 100%);
+  z-index: 1;
+}
+
+/* Orange HR line above after hooks */
+.list-view-entry[data-testid*="after"]:first-of-type::before,
+.tree-view-entry[data-testid*="after"]:first-of-type::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(230, 81, 0, 0.7) 20%, rgba(230, 81, 0, 0.7) 80%, transparent 100%);
+  z-index: 1;
+}
+
+/* Test separation - add spacing between different tests */
+.list-view-entry[data-test-boundary="true"],
+.tree-view-entry[data-test-boundary="true"] {
+  margin-top: 12px;
+  position: relative;
+}
+
+/* Hook title styling */
+.action-title-method[data-hook="true"] {
+  color: #e65100;
+  font-weight: 500;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* Alternative approach using action classes if data attributes aren't available */
+.action-title-line:has(.action-title-method:is([title*="before"], [title*="after"])) {
+  background: linear-gradient(90deg, rgba(230, 81, 0, 0.05) 0%, transparent 100%);
+  padding: 4px 8px;
+  margin: 2px -8px;
+  border-radius: 4px;
+  border-left: 2px solid rgba(230, 81, 0, 0.3);
+  position: relative;
+}
+
+/* Orange HR lines for hook sections using :has() */
+/* Before hooks - bottom line */
+.list-view-entry:has(.action-title-method[title*="before"]):last-of-type::after,
+.list-view-entry:has(.action-title-method[title*="Before"]):last-of-type::after {
+  content: '';
+  position: absolute;
+  bottom: -3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(230, 81, 0, 0.7) 20%, rgba(230, 81, 0, 0.7) 80%, transparent 100%);
+  z-index: 1;
+}
+
+/* After hooks - top line */
+.list-view-entry:has(.action-title-method[title*="after"]):first-of-type::before,
+.list-view-entry:has(.action-title-method[title*="After"]):first-of-type::before {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0%, rgba(230, 81, 0, 0.7) 20%, rgba(230, 81, 0, 0.7) 80%, transparent 100%);
+  z-index: 1;
+}
+
+/* Hook section headers */
+.action-title:has(.action-title-method:is([title*="Before Hooks"], [title*="After Hooks"])) {
+  font-weight: 600;
+  color: #e65100;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+}
+
+/* Reduce opacity for hook actions to distinguish from test actions */
+.list-view-entry:has(.action-title-method[title*="before"]),
+.list-view-entry:has(.action-title-method[title*="after"]) {
+  opacity: 0.8;
+}
+
+.list-view-entry:has(.action-title-method[title*="before"]):hover,
+.list-view-entry:has(.action-title-method[title*="after"]):hover {
+  opacity: 1;
+}
+
+/* Network request items */
+.action-network-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--vscode-tab-inactiveForeground);
+}
+
+.action-network-indicator {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+  padding: 2px 8px;
+  background: rgba(100, 150, 255, 0.15);
+  border: 1px solid rgba(100, 150, 255, 0.3);
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 500;
+  color: #6495ed;
+  pointer-events: none;
+}
+
+.action-network-indicator .codicon {
+  font-size: 12px;
+}
+
+.action-network-method {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: white;
+}
+
+.action-network-method.method-get {
+  background: #17a2b8;
+}
+
+.action-network-method.method-post {
+  background: #28a745;
+}
+
+.action-network-method.method-put {
+  background: #ffc107;
+  color: #212529;
+}
+
+.action-network-method.method-patch {
+  background: #fd7e14;
+}
+
+.action-network-method.method-delete {
+  background: #dc3545;
+}
+
+.action-network-method.method-head,
+.action-network-method.method-options {
+  background: #6c757d;
+}
+
+.action-network-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.action-network-status {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-weight: 600;
+  font-size: 10px;
+  color: white;
+}
+
+.action-network-status.status-1xx {
+  background: #6c757d;
+}
+
+.action-network-status.status-2xx {
+  background: #28a745;
+}
+
+.action-network-status.status-3xx {
+  background: #ffc107;
+}
+
+.action-network-status.status-4xx {
+  background: #fd7e14;
+}
+
+.action-network-status.status-5xx {
+  background: #dc3545;
+}

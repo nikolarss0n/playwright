@@ -1,0 +1,110 @@
+/*
+  Copyright (c) Microsoft Corporation.
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+*/
+
+.tree-view-content {
+  display: flex;
+  flex-direction: column;
+  flex: auto;
+  position: relative;
+  user-select: none;
+  overflow: hidden auto;
+  outline: 1px solid transparent;
+}
+
+.tree-view-entry {
+  display: flex;
+  flex: none;
+  cursor: pointer;
+  align-items: center;
+  white-space: nowrap;
+  line-height: 32px;
+  padding: 4px 8px 4px 5px;
+  margin: 2px 4px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.tree-view-entry:hover:not(.selected) {
+  background-color: var(--vscode-list-hoverBackground);
+}
+
+.tree-view-content.not-selectable > .tree-view-entry {
+  cursor: inherit;
+}
+
+.tree-view-entry.highlighted:not(.selected) {
+  background-color: var(--vscode-list-inactiveSelectionBackground) !important;
+}
+
+.tree-view-entry.selected {
+  z-index: 10;
+  font-weight: 500;
+}
+
+.tree-view-indent {
+  min-width: 16px;
+}
+
+.tree-view-content:focus .tree-view-entry.selected {
+  background-color: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+  border-left: 3px solid #e65100;
+  padding-left: 2px;
+}
+
+.tree-view-content .tree-view-entry.selected {
+  background-color: var(--vscode-list-inactiveSelectionBackground);
+  border-left: 3px solid #e65100;
+  padding-left: 2px;
+}
+
+.tree-view-content:focus .tree-view-entry.selected * {
+  color: var(--vscode-list-activeSelectionForeground) !important;
+  background-color: transparent !important;
+}
+
+.tree-view-content:focus .tree-view-entry.selected .codicon {
+  color: var(--vscode-list-activeSelectionForeground) !important;
+}
+
+.tree-view-content:focus .tree-view-entry.selected button.eye.toggled {
+  border-radius: 6px;
+  outline: 1px solid var(--vscode-button-foreground);
+}
+
+.tree-view-empty {
+  flex: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-view-entry.error {
+  color: var(--vscode-list-errorForeground);
+  background: linear-gradient(135deg, rgba(255, 9, 108, 0.1) 0%, rgba(255, 9, 108, 0.15) 100%);
+  border-left: 3px solid #ff096c;
+}
+
+.tree-view-entry.warning {
+  color: var(--vscode-list-warningForeground);
+  background: linear-gradient(135deg, rgba(255, 165, 0, 0.1) 0%, rgba(255, 165, 0, 0.15) 100%);
+  border-left: 3px solid #ffa500;
+}
+
+.tree-view-entry.info {
+  background: linear-gradient(135deg, rgba(33, 150, 243, 0.1) 0%, rgba(33, 150, 243, 0.15) 100%);
+  border-left: 3px solid #2196f3;
+}

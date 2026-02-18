@@ -1,0 +1,16 @@
+{
+  "name": "action-capture-backend-example",
+  "version": "1.0.0",
+  "description": "Example backend server for receiving Playwright action captures",
+  "main": "server.ts",
+  "scripts": {
+    "start": "npx ts-node server.ts",
+    "dev": "npx ts-node-dev server.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  }
+}
