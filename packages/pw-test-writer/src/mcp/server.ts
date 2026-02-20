@@ -27,10 +27,10 @@ export function createMcpServer(cwd: string): Server {
 Use this server to run and debug Playwright E2E tests. Prefer these tools over running tests manually via bash.
 
 ## Workflow
-0. e2e_get_context — load stored flows + page object index (do this FIRST before debugging)
+0. e2e_get_context — load stored flows + page object index (recommended before debugging, but e2e_run_test also auto-loads the matching flow per test)
 1. e2e_list_projects — see available Playwright projects from the config
 2. e2e_list_tests — discover tests (use "project" param to filter, e.g. "e2e", "admin")
-3. e2e_run_test — run a specific test (by file:line) with action capture, or run all tests (omit location) for a pass/fail summary. Returns runId
+3. e2e_run_test — run a specific test (by file:line) with action capture, or run all tests (omit location) for a pass/fail summary. Returns runId. **Auto-loads matching flow before run and auto-saves flow on pass.**
 4. Diagnose failures using the runId:
    - e2e_get_failure_report — comprehensive error report with DOM, network, console, timeline
    - e2e_get_actions — step-by-step action timeline
@@ -44,9 +44,11 @@ Use this server to run and debug Playwright E2E tests. Prefer these tools over r
 5. Fix the test code, then re-run with e2e_run_test to verify
 
 ## Context Loading
-- **Always call \`e2e_get_context\` before debugging.** It returns stored application flows and a page object index in one call.
+- \`e2e_run_test\` **auto-loads** the matching flow for the test being run and includes it in the response on failure. It also **auto-saves** flows when tests pass.
+- Use \`e2e_get_context\` for full project context (all flows + page object index) — useful when you need to see the big picture.
 - Cross-reference stored flows against the test's action timeline to identify missing steps.
 - Use the page object index to find existing methods instead of writing raw Playwright calls.
+- After a batch run, check the **flow coverage summary**. Use \`e2e_build_flows\` to auto-run uncovered tests individually and save their flows.
 
 ## Flow Discovery (when no flows are stored)
 
@@ -62,7 +64,7 @@ When \`e2e_get_context\` returns no stored flows, you must understand the applic
 
 4. **Scan all specs.** Use \`e2e_discover_flows\` to get a draft flow map from static analysis of all spec files — this shows you how similar features are tested.
 
-5. **Save confirmed flows.** After fixing, propose the complete flow to the user with \`e2e_save_app_flow\` so future sessions start with full context.
+5. **Flows are auto-saved** when tests pass via \`e2e_run_test\`. Use \`e2e_save_app_flow\` manually to add pre_conditions, notes, or related_flows that auto-save can't infer.
 
 ## Debugging Tips
 - Start with e2e_get_failure_report for a quick overview of what went wrong
@@ -217,8 +219,8 @@ Combine both: use \`repeatEach: 40\` to confirm flakiness, then \`retries: 2\` t
     discoverProjects: (cwd: string) => discoverProjects(cwd),
     runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number; repeatEach?: number }) =>
       runTest(location, cwd, { project: options?.project, grep: options?.grep, timeoutMs: options?.timeoutMs, repeatEach: options?.repeatEach, onProgress: sendProgress }),
-    runProject: (cwd: string, options?: { project?: string; repeatEach?: number }) =>
-      runProject(cwd, { project: options?.project, repeatEach: options?.repeatEach, onProgress: sendProgress }),
+    runProject: (cwd: string, options?: { project?: string; grep?: string; repeatEach?: number }) =>
+      runProject(cwd, { project: options?.project, grep: options?.grep, repeatEach: options?.repeatEach, onProgress: sendProgress }),
     sendProgress,
   };
 

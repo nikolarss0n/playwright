@@ -59,24 +59,39 @@ export async function runTest(
     // Continue without capture
   }
 
+  // Resolve test title from file:line before running
+  const lastColon = testLocation.lastIndexOf(':');
+  const file = lastColon > 0 ? testLocation.substring(0, lastColon) : testLocation;
+  const lineNum = lastColon > 0 ? parseInt(testLocation.substring(lastColon + 1), 10) : NaN;
+  const relFile = path.relative(cwd, file);
+
+  let resolvedTitle: string | undefined;
+  if (!isNaN(lineNum)) {
+    try {
+      const discovered = await discoverTests(cwd, options?.project);
+      for (const f of discovered) {
+        if (f.relativePath === relFile || f.path.endsWith(relFile)) {
+          const match = f.tests.find(t => t.line === lineNum);
+          if (match) { resolvedTitle = match.fullTitle; break; }
+        }
+      }
+    } catch {
+      // Non-critical — fall back to location string
+    }
+  }
+
   const startTime = Date.now();
 
   try {
     const spawnResult = await spawnTest(testLocation, cwd, captureEndpoint, options?.timeoutMs, options?.project, options?.grep, options?.repeatEach, options?.onProgress);
     const duration = Date.now() - startTime;
 
-    // Collect screenshots
     const attachments = collectScreenshots(cwd, startTime);
     collectActionScreenshots(target.actions, cwd, attachments);
 
-    // Parse test location for file/line
-    const lastColon = testLocation.lastIndexOf(':');
-    const file = lastColon > 0 ? testLocation.substring(0, lastColon) : testLocation;
-    const relFile = path.relative(cwd, file);
-
     const entry: TestRunTestEntry = {
       file: relFile,
-      test: testLocation,
+      test: resolvedTitle || spawnResult.testTitle || testLocation,
       location: testLocation,
       status: spawnResult.success ? 'passed' : 'failed',
       duration,
@@ -130,7 +145,7 @@ export async function runTests(
 
       tests.push({
         file: relFile,
-        test: loc,
+        test: spawnResult.testTitle || loc,
         location: loc,
         status: spawnResult.success ? 'passed' : 'failed',
         duration,
@@ -152,13 +167,14 @@ export async function runTests(
  */
 export async function runProject(
   cwd: string,
-  options?: { project?: string; timeoutMs?: number; repeatEach?: number; onProgress?: (msg: string) => void },
+  options?: { project?: string; grep?: string; timeoutMs?: number; repeatEach?: number; onProgress?: (msg: string) => void },
 ): Promise<TestRunResult> {
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startTime = Date.now();
 
   const args = ['test'];
   if (options?.project) args.push('--project', options.project);
+  if (options?.grep) args.push('--grep', options.grep);
   if (options?.repeatEach && options.repeatEach > 1) args.push('--repeat-each', String(options.repeatEach));
   args.push('--reporter=json');
 
@@ -311,6 +327,7 @@ function parseJsonRunResults(jsonStr: string, cwd: string): TestRunTestEntry[] {
 interface SpawnResult {
   success: boolean;
   error?: string;
+  testTitle?: string;
 }
 
 function spawnTest(
@@ -393,8 +410,12 @@ function spawnTest(
 
     child.on('close', (code) => {
       clearTimeout(timer);
+
+      // Extract test title from line reporter output: "✓  1 [project] › file:line › Describe › test name"
+      const testTitle = parseTestTitleFromLineOutput(stdout);
+
       if (code === 0) {
-        resolve({ success: true });
+        resolve({ success: true, testTitle });
         return;
       }
 
@@ -433,11 +454,11 @@ function spawnTest(
       }
 
       if (errorLines.length > 0) {
-        resolve({ success: false, error: errorLines.join('\n') });
+        resolve({ success: false, error: errorLines.join('\n'), testTitle });
       } else {
         const noise = /^\d+ (passed|failed|skipped)|^Running \d|^npx |^\[.+\] ›|^reports\/|^\s*$/;
         const meaningful = lines.map(l => l.trim()).filter(l => l && !noise.test(l));
-        resolve({ success: false, error: meaningful.slice(-8).join('\n') || `Exit code ${code}` });
+        resolve({ success: false, error: meaningful.slice(-8).join('\n') || `Exit code ${code}`, testTitle });
       }
     });
 
@@ -446,6 +467,28 @@ function spawnTest(
       resolve({ success: false, error: err.message });
     });
   });
+}
+
+/**
+ * Parse test title from Playwright line reporter output.
+ * Format: "  ✓  1 [project] › file:line › Describe › test name"
+ * or:     "  ✗  1 [project] › file:line › Describe › test name"
+ */
+function parseTestTitleFromLineOutput(stdout: string): string | undefined {
+  const clean = stdout.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+  for (const line of clean.split('\n')) {
+    // Match: "  ✓  1 [project] › file › Describe › test name" or without project
+    const match = line.match(/^\s*[✓✗✔✘×]\s+\d+\s+(?:\[.+?\]\s+›\s+)?(.+)/);
+    if (match) {
+      // The rest is "file:line › Describe › test name" — extract after first ›
+      const parts = match[1].split('›').map(s => s.trim());
+      if (parts.length >= 2) {
+        // Skip the file:line part, join the rest as the full title
+        return parts.slice(1).join(' › ');
+      }
+    }
+  }
+  return undefined;
 }
 
 function collectScreenshots(cwd: string, startTime: number): TestAttachment[] {

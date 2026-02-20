@@ -10,6 +10,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { glob } from 'glob';
+import type { ActionCapture } from 'playwright-core/lib/server/actionCaptureTypes';
+import type { TestRunTestEntry } from './types.js';
 
 export interface FlowStep {
   name: string;
@@ -223,4 +225,146 @@ export function formatFlows(file: FlowsFile): string {
   }
 
   return lines.join('\n');
+}
+
+// ── Auto-flow functions ──
+
+function slugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+/** Strip Playwright file-path prefix and project suffix from a test title. */
+export function normalizeTestTitle(testTitle: string): string {
+  let t = testTitle;
+  // Strip trailing project suffix like " [e2e]" for consistent naming across modes
+  t = t.replace(/\s*\[[\w-]+\]\s*$/, '');
+  // Strip file path prefix from Playwright's fullTitle format:
+  // "path/to/file.spec.ts > Suite > Test" → "Suite > Test"
+  t = t.replace(/^.*?\.spec\.\w+\s*>\s*/, '');
+  return t;
+}
+
+export function deriveFlowName(file: string, testTitle: string): string {
+  const base = path.basename(file).replace(/\.spec\.\w+$/, '').replace(/\.\w+$/, '');
+  return `${slugify(base)}/${slugify(normalizeTestTitle(testTitle))}`;
+}
+
+/** Internal actions to skip when building flows */
+const SKIP_METHODS = new Set([
+  'waitForNavigation', 'waitForLoadState', 'waitForURL', 'waitForSelector',
+  'waitForTimeout', 'waitForFunction', 'waitForEvent', 'waitForResponse',
+  'waitForRequest', 'finished', 'close', 'dispose',
+]);
+
+export function formatActionForFlow(action: ActionCapture): string | null {
+  if (SKIP_METHODS.has(action.method)) return null;
+  if (action.type === 'Response' || action.type === 'Request') return null;
+  if (action.type === 'Frame' && SKIP_METHODS.has(action.method)) return null;
+
+  if (action.title) return action.title;
+
+  const params = action.params;
+  let paramStr = '';
+  if (params) {
+    if (typeof params === 'string') {
+      paramStr = params.length > 80 ? params.slice(0, 80) + '...' : params;
+    } else if (typeof params === 'object') {
+      const selector = params.selector || params.url || params.name || params.value;
+      if (typeof selector === 'string') {
+        paramStr = selector.length > 80 ? selector.slice(0, 80) + '...' : selector;
+      } else {
+        const json = JSON.stringify(params);
+        paramStr = json.length > 80 ? json.slice(0, 80) + '...' : json;
+      }
+    }
+  }
+
+  return `${action.type}.${action.method}(${paramStr})`;
+}
+
+export function buildFlowFromActions(test: TestRunTestEntry): AppFlow {
+  const flowName = deriveFlowName(test.file, test.test);
+
+  const steps: FlowStep[] = [];
+  let currentUrl = '';
+  let currentActions: string[] = [];
+
+  for (const action of test.actions) {
+    const formatted = formatActionForFlow(action);
+    if (!formatted) continue;
+
+    const url = action.pageUrl || 'unknown';
+    if (url !== currentUrl && currentActions.length > 0) {
+      let stepName: string;
+      try {
+        stepName = currentUrl ? new URL(currentUrl).pathname : 'initial';
+      } catch {
+        stepName = currentUrl || 'initial';
+      }
+      steps.push({ name: stepName, required_actions: currentActions });
+      currentActions = [];
+    }
+    currentUrl = url;
+    currentActions.push(formatted);
+  }
+
+  if (currentActions.length > 0) {
+    let stepName: string;
+    try {
+      stepName = currentUrl ? new URL(currentUrl).pathname : 'initial';
+    } catch {
+      stepName = currentUrl || 'initial';
+    }
+    steps.push({ name: stepName, required_actions: currentActions });
+  }
+
+  return {
+    flowName,
+    description: `Auto-captured flow for: ${normalizeTestTitle(test.test)}`,
+    steps,
+    confirmed: true,
+    savedAt: new Date().toISOString(),
+  };
+}
+
+export function compareFlows(existing: AppFlow, current: AppFlow): { changed: boolean; summary: string } {
+  if (existing.steps.length !== current.steps.length) {
+    return { changed: true, summary: `Step count changed: ${existing.steps.length} → ${current.steps.length}` };
+  }
+
+  const diffs: string[] = [];
+  for (let i = 0; i < existing.steps.length; i++) {
+    const eStep = existing.steps[i];
+    const cStep = current.steps[i];
+
+    if (eStep.name !== cStep.name) {
+      diffs.push(`Step ${i + 1} renamed: "${eStep.name}" → "${cStep.name}"`);
+    }
+
+    const eActions = eStep.required_actions.join('\n');
+    const cActions = cStep.required_actions.join('\n');
+    if (eActions !== cActions) {
+      const added = cStep.required_actions.filter(a => !eStep.required_actions.includes(a));
+      const removed = eStep.required_actions.filter(a => !cStep.required_actions.includes(a));
+      const parts: string[] = [];
+      if (added.length) parts.push(`+${added.length} actions`);
+      if (removed.length) parts.push(`-${removed.length} actions`);
+      diffs.push(`Step ${i + 1} ("${cStep.name}"): ${parts.join(', ')}`);
+    }
+  }
+
+  if (diffs.length === 0) return { changed: false, summary: 'Flow is up to date' };
+  return { changed: true, summary: diffs.join('; ') };
+}
+
+export function findFlowForTest(cwd: string, file: string, testTitle: string): AppFlow | null {
+  const flowsFile = readFlows(cwd);
+  if (flowsFile.flows.length === 0) return null;
+
+  const derivedName = deriveFlowName(file, testTitle);
+  const exact = flowsFile.flows.find(f => f.flowName === derivedName);
+  if (exact) return exact;
+
+  const baseSlug = slugify(path.basename(file).replace(/\.spec\.\w+$/, '').replace(/\.\w+$/, ''));
+  return flowsFile.flows.find(f => f.flowName.startsWith(baseSlug + '/')) ?? null;
 }
