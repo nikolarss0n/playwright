@@ -192,8 +192,8 @@ When you encounter a dirty-state failure, save two flows: the clean-start flow w
     runs,
     discoverTests: (cwd: string, project?: string) => discoverTests(cwd, project),
     discoverProjects: (cwd: string) => discoverProjects(cwd),
-    runTest: (location: string, cwd: string, options?: { project?: string; grep?: string }) =>
-      runTest(location, cwd, { project: options?.project, grep: options?.grep }),
+    runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number }) =>
+      runTest(location, cwd, { project: options?.project, grep: options?.grep, timeoutMs: options?.timeoutMs }),
     runProject: (cwd: string, options?: { project?: string }) =>
       runProject(cwd, { project: options?.project }),
   };

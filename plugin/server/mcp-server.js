@@ -18925,7 +18925,8 @@ var toolDefs = [
       properties: {
         location: { type: "string", description: "Test location: file path or file:line. Omit to run all tests." },
         grep: { type: "string", description: "Filter tests by title (passed as --grep to Playwright). Use with location to isolate parameterized tests that share the same line number." },
-        project: { type: "string", description: 'Playwright project name to filter by (e.g. "e2e", "admin", "mobile")' }
+        project: { type: "string", description: 'Playwright project name to filter by (e.g. "e2e", "admin", "mobile")' },
+        timeout: { type: "number", description: "Timeout in seconds for the test run (default: 120). Increase for slow tests or multi-step flows." }
       }
     }
   },
@@ -19246,12 +19247,13 @@ async function handleRunTest(args, ctx) {
   const location = args.location ? String(args.location) : void 0;
   const grep = args.grep ? String(args.grep) : void 0;
   const project = args.project ? String(args.project) : void 0;
+  const timeoutMs = args.timeout ? Number(args.timeout) * 1e3 : void 0;
   if (!location) {
     const result2 = await ctx.runProject(ctx.cwd, { project });
     ctx.runs.set(result2.runId, result2);
     return text(formatBatchResults(result2, project));
   }
-  const result = await ctx.runTest(location, ctx.cwd, { project, grep });
+  const result = await ctx.runTest(location, ctx.cwd, { project, grep, timeoutMs });
   ctx.runs.set(result.runId, result);
   const lines = [`**Run ID:** \`${result.runId}\``, ""];
   for (const test of result.tests) {
@@ -21105,7 +21107,7 @@ When you encounter a dirty-state failure, save two flows: the clean-start flow w
     runs,
     discoverTests: (cwd3, project) => discoverTests(cwd3, project),
     discoverProjects: (cwd3) => discoverProjects(cwd3),
-    runTest: (location, cwd3, options) => runTest(location, cwd3, { project: options?.project, grep: options?.grep }),
+    runTest: (location, cwd3, options) => runTest(location, cwd3, { project: options?.project, grep: options?.grep, timeoutMs: options?.timeoutMs }),
     runProject: (cwd3, options) => runProject(cwd3, { project: options?.project })
   };
   server2.setRequestHandler(ListToolsRequestSchema, async () => ({
