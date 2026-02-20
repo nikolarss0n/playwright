@@ -19,7 +19,7 @@ export function createMcpServer(cwd: string): Server {
   const runs: RunsMap = new Map<string, TestRunResult>();
 
   const server = new Server(
-    { name: 'playwright-autopilot', version: '0.3.7' },
+    { name: 'playwright-autopilot', version: '0.4.0' },
     {
       capabilities: { tools: {} },
       instructions: `E2E Test Capture — Playwright test runner with deep debugging.
@@ -183,19 +183,43 @@ When saving flows with \`e2e_save_app_flow\`, capture the full picture:
 - \`checkout--continue-draft\` → tests that a partial draft can be resumed
 - \`checkout--validation\` → tests form validation errors
 
-When you encounter a dirty-state failure, save two flows: the clean-start flow with the fix noted, and the continuation flow as a separate confirmed variant.`,
+When you encounter a dirty-state failure, save two flows: the clean-start flow with the fix noted, and the continuation flow as a separate confirmed variant.
+
+## Reporting & Evidence
+
+- **e2e_get_evidence_bundle** — Get ALL failure evidence in one call (error, steps to reproduce, action timeline, network with bodies, console, DOM snapshot, screenshots). Pass \`outputFile: true\` to write a markdown file for Jira attachments.
+- **e2e_generate_report** — Generate a self-contained HTML or JSON report file. HTML includes inline styles, base64 screenshots, and collapsible per-test sections. Great for sharing with non-technical stakeholders.
+
+## Flaky Detection
+
+Two modes for detecting flaky tests:
+
+**\`retries: N\`** — Run N+1 separate Playwright processes. Each gets its own runId with full action capture. Best for debugging (2-3 retries). Returns FLAKY/CONSISTENT PASS/CONSISTENT FAIL verdict.
+
+**\`repeatEach: N\`** — Native Playwright \`--repeat-each\`. All N iterations in one process. Fast stress-test for confirming flakiness (use 30-100). Returns pass/fail counts.
+
+Combine both: use \`repeatEach: 40\` to confirm flakiness, then \`retries: 2\` to capture detailed failure data for investigation.
+
+## Coverage Analysis
+
+- **e2e_suggest_tests** — Scans page objects, spec files, and stored flows to identify coverage gaps: untested page object methods, missing flow variants (e.g. "checkout" exists but "checkout--continue-draft" doesn't), and flow steps that no spec exercises.`,
     },
   );
+
+  const sendProgress = (message: string) => {
+    try { server.sendLoggingMessage({ level: 'info', data: message }); } catch {}
+  };
 
   const ctx: ToolContext = {
     cwd,
     runs,
     discoverTests: (cwd: string, project?: string) => discoverTests(cwd, project),
     discoverProjects: (cwd: string) => discoverProjects(cwd),
-    runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number }) =>
-      runTest(location, cwd, { project: options?.project, grep: options?.grep, timeoutMs: options?.timeoutMs }),
-    runProject: (cwd: string, options?: { project?: string }) =>
-      runProject(cwd, { project: options?.project }),
+    runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number; repeatEach?: number }) =>
+      runTest(location, cwd, { project: options?.project, grep: options?.grep, timeoutMs: options?.timeoutMs, repeatEach: options?.repeatEach, onProgress: sendProgress }),
+    runProject: (cwd: string, options?: { project?: string; repeatEach?: number }) =>
+      runProject(cwd, { project: options?.project, repeatEach: options?.repeatEach, onProgress: sendProgress }),
+    sendProgress,
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({

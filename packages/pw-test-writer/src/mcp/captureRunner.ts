@@ -45,7 +45,7 @@ class MemoryTarget implements CaptureTarget {
 export async function runTest(
   testLocation: string,
   cwd: string,
-  options?: { timeoutMs?: number; project?: string; grep?: string },
+  options?: { timeoutMs?: number; project?: string; grep?: string; repeatEach?: number; onProgress?: (msg: string) => void },
 ): Promise<TestRunResult> {
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const target = new MemoryTarget();
@@ -62,7 +62,7 @@ export async function runTest(
   const startTime = Date.now();
 
   try {
-    const spawnResult = await spawnTest(testLocation, cwd, captureEndpoint, options?.timeoutMs, options?.project, options?.grep);
+    const spawnResult = await spawnTest(testLocation, cwd, captureEndpoint, options?.timeoutMs, options?.project, options?.grep, options?.repeatEach, options?.onProgress);
     const duration = Date.now() - startTime;
 
     // Collect screenshots
@@ -152,13 +152,14 @@ export async function runTests(
  */
 export async function runProject(
   cwd: string,
-  options?: { project?: string; timeoutMs?: number },
+  options?: { project?: string; timeoutMs?: number; repeatEach?: number; onProgress?: (msg: string) => void },
 ): Promise<TestRunResult> {
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const startTime = Date.now();
 
   const args = ['test'];
   if (options?.project) args.push('--project', options.project);
+  if (options?.repeatEach && options.repeatEach > 1) args.push('--repeat-each', String(options.repeatEach));
   args.push('--reporter=json');
 
   const localBin = path.join(cwd, 'node_modules', '.bin', 'playwright');
@@ -173,7 +174,32 @@ export async function runProject(
     });
 
     let out = '';
+    let batchPassed = 0;
+    let batchFailed = 0;
+    let batchTotal = 0;
+
     child.stdout?.on('data', (d) => { out += d.toString(); });
+    child.stderr?.on('data', (d) => {
+      if (!options?.onProgress) return;
+      const clean = d.toString().replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+      for (const line of clean.split('\n')) {
+        const trimmed = line.trim();
+        // Parse "Running N tests using M workers"
+        const runningMatch = trimmed.match(/Running (\d+) test/);
+        if (runningMatch) {
+          batchTotal = parseInt(runningMatch[1], 10);
+          options.onProgress(`Running ${batchTotal} tests...`);
+        }
+        // Parse pass/fail counts from summary lines like "63 passed" or "2 failed"
+        const passedMatch = trimmed.match(/(\d+) passed/);
+        const failedMatch = trimmed.match(/(\d+) failed/);
+        if (passedMatch) batchPassed = parseInt(passedMatch[1], 10);
+        if (failedMatch) batchFailed = parseInt(failedMatch[1], 10);
+        if ((passedMatch || failedMatch) && batchTotal > 0) {
+          options.onProgress(`${batchPassed + batchFailed}/${batchTotal} · ✅ ${batchPassed} passed, ❌ ${batchFailed} failed`);
+        }
+      }
+    });
 
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
@@ -294,6 +320,8 @@ function spawnTest(
   timeoutMs = 120000,
   project?: string,
   grep?: string,
+  repeatEach?: number,
+  onProgress?: (msg: string) => void,
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     const env: NodeJS.ProcessEnv = {
@@ -316,6 +344,7 @@ function spawnTest(
     const args = ['test', testLocation];
     if (grep) args.push('--grep', grep);
     if (project) args.push('--project', project);
+    if (repeatEach && repeatEach > 1) args.push('--repeat-each', String(repeatEach));
     args.push('--reporter=line');
 
     // Use the target project's local playwright binary to avoid resolving
@@ -332,8 +361,28 @@ function spawnTest(
 
     let stdout = '';
     let stderr = '';
+    let progressPassed = 0;
+    let progressFailed = 0;
+    const total = repeatEach && repeatEach > 1 ? repeatEach : 0;
 
-    child.stdout?.on('data', (data) => { stdout += data.toString(); });
+    child.stdout?.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      if (onProgress && total > 0) {
+        // Playwright line reporter outputs lines like: "  ✓  1 ..." or "  ✗  2 ..."
+        const clean = chunk.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+        for (const line of clean.split('\n')) {
+          const trimmed = line.trim();
+          if (/^[✓✔]/.test(trimmed) || /^\d+\s+passed/.test(trimmed)) {
+            progressPassed++;
+            onProgress(`${progressPassed + progressFailed}/${total} · ✅ ${progressPassed} passed, ❌ ${progressFailed} failed`);
+          } else if (/^[✗✘×]/.test(trimmed) || /^\d+\s+failed/.test(trimmed)) {
+            progressFailed++;
+            onProgress(`${progressPassed + progressFailed}/${total} · ✅ ${progressPassed} passed, ❌ ${progressFailed} failed`);
+          }
+        }
+      }
+    });
     child.stderr?.on('data', (data) => { stderr += data.toString(); });
 
     const timer = setTimeout(() => {

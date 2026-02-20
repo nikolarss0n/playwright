@@ -46,6 +46,8 @@ export const toolDefs: ToolDef[] = [
         grep: { type: 'string', description: 'Filter tests by title (passed as --grep to Playwright). Use with location to isolate parameterized tests that share the same line number.' },
         project: { type: 'string', description: 'Playwright project name to filter by (e.g. "e2e", "admin", "mobile")' },
         timeout: { type: 'number', description: 'Timeout in seconds for the test run (default: 120). Increase for slow tests or multi-step flows.' },
+        retries: { type: 'number', description: 'Run the test N+1 times to detect flaky failures (default: 0). Only works with location set. Returns per-run results and a FLAKY/CONSISTENT verdict.' },
+        repeatEach: { type: 'number', description: 'Repeat each test N times within a single Playwright run (native --repeat-each). Fast stress-test for flakiness — use 30-100 for confidence. Returns pass/fail counts.' },
       },
     },
   },
@@ -249,6 +251,39 @@ export const toolDefs: ToolDef[] = [
     },
   },
   {
+    name: 'e2e_get_evidence_bundle',
+    description: 'Get ALL failure evidence for a test in one call — error, steps to reproduce, action timeline, network, console, DOM snapshot, and screenshots. Replaces calling 6+ tools separately. Use for Jira attachments with outputFile: true.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: 'Run ID from e2e_run_test' },
+        testIndex: { type: 'number', description: 'Test index within the run (default: 0)' },
+        outputFile: { type: 'boolean', description: 'Write evidence to test-reports/evidence-<runId>.md (default: false)' },
+      },
+      required: ['runId'],
+    },
+  },
+  {
+    name: 'e2e_generate_report',
+    description: 'Generate a self-contained HTML or JSON report file for a test run. HTML includes inline styles, base64 screenshots, collapsible per-test sections.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        runId: { type: 'string', description: 'Run ID from e2e_run_test' },
+        format: { type: 'string', description: '"html" or "json" (default: "html")' },
+      },
+      required: ['runId'],
+    },
+  },
+  {
+    name: 'e2e_suggest_tests',
+    description: 'Analyze test coverage gaps: untested page object methods, missing flow variants, and uncovered flow steps. No parameters — scans everything.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+    },
+  },
+  {
     name: 'e2e_get_context',
     description: 'Load project context in one call: stored application flows + page object index. Call this before debugging to understand the project structure and available methods.',
     inputSchema: {
@@ -303,8 +338,9 @@ export interface ToolContext {
   runs: RunsMap;
   discoverTests: (cwd: string, project?: string) => Promise<Array<{ path: string; relativePath: string; tests: Array<{ title: string; line: number; fullTitle: string }> }>>;
   discoverProjects: (cwd: string) => Promise<Array<{ name: string; testDir?: string }>>;
-  runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number }) => Promise<TestRunResult>;
-  runProject: (cwd: string, options?: { project?: string }) => Promise<TestRunResult>;
+  runTest: (location: string, cwd: string, options?: { project?: string; grep?: string; timeoutMs?: number; repeatEach?: number }) => Promise<TestRunResult>;
+  runProject: (cwd: string, options?: { project?: string; repeatEach?: number }) => Promise<TestRunResult>;
+  sendProgress?: (message: string) => void;
 }
 
 function getTest(ctx: ToolContext, runId: string, testIndex = 0): TestRunTestEntry | null {
@@ -357,6 +393,12 @@ export async function handleTool(name: string, args: Record<string, unknown>, ct
       return handleFindElements(args, ctx);
     case 'e2e_scan_page_objects':
       return handleScanPageObjects(ctx);
+    case 'e2e_get_evidence_bundle':
+      return handleGetEvidenceBundle(args, ctx);
+    case 'e2e_generate_report':
+      return handleGenerateReport(args, ctx);
+    case 'e2e_suggest_tests':
+      return handleSuggestTests(ctx);
     case 'e2e_get_app_flows':
       return handleGetAppFlows(ctx);
     case 'e2e_save_app_flow':
@@ -407,16 +449,87 @@ async function handleRunTest(args: Record<string, unknown>, ctx: ToolContext): P
   const grep = args.grep ? String(args.grep) : undefined;
   const project = args.project ? String(args.project) : undefined;
   const timeoutMs = args.timeout ? Number(args.timeout) * 1000 : undefined;
+  const retries = args.retries ? Math.max(0, Math.floor(Number(args.retries))) : 0;
+  const repeatEach = args.repeatEach ? Math.max(1, Math.floor(Number(args.repeatEach))) : undefined;
 
   // Batch mode: run all tests when no location specified
   if (!location) {
-    const result = await ctx.runProject(ctx.cwd, { project });
+    if (retries > 0) {
+      return text('⚠ `retries` is only supported when `location` is set (single-test mode). Running batch without retries.');
+    }
+    const result = await ctx.runProject(ctx.cwd, { project, repeatEach });
     ctx.runs.set(result.runId, result);
-    return text(formatBatchResults(result, project));
+
+    // Auto-generate HTML report for batch runs
+    const dir = path.join(ctx.cwd, 'test-reports');
+    fs.mkdirSync(dir, { recursive: true });
+    ctx.sendProgress?.('Generating HTML report...');
+    const html = buildHtmlReport(result, ctx.cwd, ctx.sendProgress);
+    const reportPath = path.join(dir, `report-${result.runId}.html`);
+    fs.writeFileSync(reportPath, html, 'utf-8');
+
+    return text(formatBatchResults(result, project) + `\n\n📄 **Report:** \`${reportPath}\``);
+  }
+
+  // Flaky detection mode: run N+1 times
+  if (retries > 0) {
+    const totalRuns = retries + 1;
+    const attempts: Array<{ runId: string; status: string; duration: number; error?: string }> = [];
+
+    for (let i = 0; i < totalRuns; i++) {
+      ctx.sendProgress?.(`Retry ${i + 1}/${totalRuns} starting...`);
+      const result = await ctx.runTest(location, ctx.cwd, { project, grep, timeoutMs, repeatEach });
+      ctx.runs.set(result.runId, result);
+      const firstTest = result.tests[0];
+      const status = firstTest?.status ?? 'unknown';
+      attempts.push({
+        runId: result.runId,
+        status,
+        duration: firstTest?.duration ?? 0,
+        error: firstTest?.error?.slice(0, 200),
+      });
+      const passed = attempts.filter(a => a.status === 'passed').length;
+      const failed = attempts.filter(a => a.status === 'failed').length;
+      ctx.sendProgress?.(`Retry ${i + 1}/${totalRuns} done: ${status === 'passed' ? '✅' : '❌'} (${passed} passed, ${failed} failed so far)`);
+    }
+
+    const statuses = new Set(attempts.map(a => a.status));
+    let verdict: string;
+    if (statuses.size === 1) {
+      verdict = statuses.has('passed') ? '✅ CONSISTENT PASS' : '❌ CONSISTENT FAIL';
+    } else {
+      verdict = '⚠️ FLAKY';
+    }
+
+    const lines: string[] = [
+      `## Flaky Detection: ${totalRuns} runs`,
+      '',
+      `**Verdict:** ${verdict}`,
+      '',
+      '| Run | Status | Duration | Run ID |',
+      '|-----|--------|----------|--------|',
+    ];
+    for (let i = 0; i < attempts.length; i++) {
+      const a = attempts[i];
+      const icon = a.status === 'passed' ? '✅' : '❌';
+      lines.push(`| ${i + 1} | ${icon} ${a.status} | ${formatDuration(a.duration)} | \`${a.runId}\` |`);
+    }
+    lines.push('');
+
+    if (verdict.includes('FLAKY')) {
+      const failedAttempt = attempts.find(a => a.status === 'failed');
+      if (failedAttempt) {
+        lines.push(`Use \`e2e_get_failure_report\` with runId \`${failedAttempt.runId}\` to investigate the failure.`);
+      }
+    } else if (verdict.includes('CONSISTENT FAIL')) {
+      lines.push(`Use \`e2e_get_failure_report\` with runId \`${attempts[0].runId}\` for detailed analysis.`);
+    }
+
+    return text(lines.join('\n'));
   }
 
   // Single test mode: run with action capture
-  const result = await ctx.runTest(location, ctx.cwd, { project, grep, timeoutMs });
+  const result = await ctx.runTest(location, ctx.cwd, { project, grep, timeoutMs, repeatEach });
   ctx.runs.set(result.runId, result);
 
   const lines: string[] = [`**Run ID:** \`${result.runId}\``, ''];
@@ -788,6 +901,317 @@ async function handleFindElements(args: Record<string, unknown>, ctx: ToolContex
   return text(parts.join('\n'));
 }
 
+// ── Evidence bundle & report handlers ──
+
+async function handleGetEvidenceBundle(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const runId = String(args.runId || '');
+  const testIndex = Number(args.testIndex ?? 0);
+  const outputFile = Boolean(args.outputFile ?? false);
+  const test = getTest(ctx, runId, testIndex);
+  if (!test) return error(`Run "${runId}" not found or test index ${testIndex} out of range.`);
+
+  ctx.sendProgress?.('Collecting error summary...');
+  const parts: string[] = [];
+  parts.push(`# Evidence Bundle — \`${test.file}\``);
+  parts.push('');
+  parts.push(`- **Status:** ${test.status}`);
+  parts.push(`- **Duration:** ${formatDuration(test.duration)}`);
+  parts.push(`- **Location:** \`${test.location}\``);
+
+  const failingAction = test.actions.find(a => a.error);
+  if (failingAction) {
+    parts.push(`- **Page URL:** ${failingAction.pageUrl || 'unknown'}`);
+  }
+  parts.push('');
+
+  // Error summary
+  if (test.error) {
+    parts.push('## Error');
+    parts.push(`\`\`\`\n${test.error}\n\`\`\``);
+    parts.push('');
+  }
+
+  // Steps to reproduce
+  if (test.actions.length > 0) {
+    parts.push('## Steps to Reproduce');
+    for (let i = 0; i < test.actions.length; i++) {
+      const a = test.actions[i];
+      const marker = a.error ? ' **← FAILED HERE**' : '';
+      parts.push(`${i + 1}. \`${a.type}.${a.method}\`${a.title ? ` — ${a.title}` : ''}${marker}`);
+    }
+    parts.push('');
+  }
+
+  // Action timeline
+  if (test.actions.length > 0) {
+    parts.push(`## Action Timeline (${test.actions.length} actions)`);
+    const padLen = String(test.actions.length - 1).length;
+    for (let i = 0; i < test.actions.length; i++) {
+      const a = test.actions[i];
+      const icon = a.error ? '✗' : '✓';
+      const net = a.network?.requests?.length || 0;
+      const netInfo = net > 0 ? ` [${net} req]` : '';
+      const marker = a.error ? '  ← FAILING' : '';
+      parts.push(`${String(i).padStart(padLen)}. ${icon} ${a.type}.${a.method}${netInfo}  ${formatDuration(a.timing?.durationMs)}${marker}`);
+      if (a.error) parts.push(`    ${a.error.message}`);
+    }
+    parts.push('');
+  }
+
+  // Failing action detail
+  if (failingAction) {
+    const failIdx = test.actions.indexOf(failingAction);
+    parts.push(`## Failing Action Detail (step ${failIdx})`);
+    parts.push(`- **Action:** \`${failingAction.type}.${failingAction.method}\``);
+    if (failingAction.params) {
+      const p = typeof failingAction.params === 'string' ? failingAction.params : JSON.stringify(failingAction.params, null, 2);
+      parts.push(`- **Params:** \`${p}\``);
+    }
+    if (failingAction.error) {
+      parts.push(`- **Error:** ${failingAction.error.message}`);
+      if (failingAction.error.stack) parts.push(`\`\`\`\n${failingAction.error.stack}\n\`\`\``);
+    }
+    parts.push('');
+  }
+
+  // Failed network requests with bodies
+  ctx.sendProgress?.('Collecting network requests...');
+  const allReqs = test.actions.flatMap(a => a.network?.requests || []);
+  const failedReqs = allReqs.filter(r => r.status && r.status >= 400);
+  if (failedReqs.length > 0) {
+    parts.push(`## Failed Network Requests (${failedReqs.length})`);
+    for (const r of failedReqs.slice(0, 15)) {
+      parts.push(`### \`${r.method}\` ${r.url} → **${r.status}**`);
+      parts.push(`Duration: ${formatDuration(r.durationMs)}`);
+      if (r.requestPostData) {
+        parts.push(`\nRequest body:\n\`\`\`json\n${truncate(r.requestPostData, 3000)}\n\`\`\``);
+      }
+      if (r.responseBody) {
+        const f = formatBody(r.responseBody, 5000);
+        parts.push(`\nResponse body:\n\`\`\`${f.lang}\n${f.text}\n\`\`\``);
+      }
+      parts.push('');
+    }
+  }
+
+  // Console errors
+  ctx.sendProgress?.('Collecting console errors...');
+  const allConsole = test.actions.flatMap(a => a.console || []);
+  const consoleErrors = allConsole.filter(c => c.type === 'error');
+  if (consoleErrors.length > 0) {
+    parts.push(`## Console Errors (${consoleErrors.length})`);
+    for (const e of consoleErrors.slice(0, 20)) {
+      parts.push(`- ${e.text}`);
+    }
+    parts.push('');
+  }
+
+  // DOM snapshot at failure
+  ctx.sendProgress?.('Collecting DOM snapshot...');
+  if (failingAction?.snapshot?.after) {
+    parts.push('## DOM at Failure Point');
+    parts.push(`\`\`\`\n${truncate(failingAction.snapshot.after, 5000)}\n\`\`\``);
+    parts.push('');
+  }
+
+  const markdown = parts.join('\n');
+
+  // Build response with screenshots as image content
+  ctx.sendProgress?.('Reading screenshots...');
+  const content: Content[] = [{ type: 'text', text: markdown }];
+  const screenshots = test.attachments.filter(a => a.contentType.startsWith('image/'));
+  for (const screenshot of screenshots) {
+    try {
+      const data = fs.readFileSync(screenshot.path);
+      content.push(
+        { type: 'text', text: `\n**Screenshot:** ${screenshot.name}` },
+        { type: 'image', data: data.toString('base64'), mimeType: screenshot.contentType },
+      );
+    } catch {
+      // skip unreadable screenshots
+    }
+  }
+
+  // Write to file if requested
+  if (outputFile) {
+    const dir = path.join(ctx.cwd, 'test-reports');
+    fs.mkdirSync(dir, { recursive: true });
+    const outPath = path.join(dir, `evidence-${runId}.md`);
+    fs.writeFileSync(outPath, markdown, 'utf-8');
+    content.push({ type: 'text', text: `\n_Evidence written to \`${outPath}\`_` });
+  }
+
+  return { content };
+}
+
+async function handleGenerateReport(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
+  const runId = String(args.runId || '');
+  const format = String(args.format || 'html');
+  const run = ctx.runs.get(runId);
+  if (!run) return error(`Run "${runId}" not found.`);
+
+  const dir = path.join(ctx.cwd, 'test-reports');
+  fs.mkdirSync(dir, { recursive: true });
+
+  if (format === 'json') {
+    ctx.sendProgress?.('Serializing JSON report...');
+    const data = {
+      runId: run.runId,
+      timestamp: run.timestamp,
+      tests: run.tests.map(t => ({
+        file: t.file,
+        test: t.test,
+        location: t.location,
+        status: t.status,
+        duration: t.duration,
+        error: t.error,
+        actions: t.actions,
+        attachments: t.attachments.map(a => ({ name: a.name, path: a.path, contentType: a.contentType })),
+      })),
+    };
+    const outPath = path.join(dir, `report-${runId}.json`);
+    fs.writeFileSync(outPath, JSON.stringify(data, null, 2), 'utf-8');
+    return text(`JSON report written to \`${outPath}\` (${run.tests.length} tests).`);
+  }
+
+  // HTML format
+  ctx.sendProgress?.(`Building HTML report for ${run.tests.length} tests...`);
+  const html = buildHtmlReport(run, ctx.cwd, ctx.sendProgress);
+  const outPath = path.join(dir, `report-${runId}.html`);
+  fs.writeFileSync(outPath, html, 'utf-8');
+  const passed = run.tests.filter(t => t.status === 'passed').length;
+  const failed = run.tests.filter(t => t.status === 'failed').length;
+  return text(`HTML report written to \`${outPath}\` (${passed} passed, ${failed} failed).`);
+}
+
+async function handleSuggestTests(ctx: ToolContext): Promise<ToolResult> {
+  ctx.sendProgress?.('Scanning page objects, spec files, and flows...');
+  const [objects, specs, flowsFile] = await Promise.all([
+    scanPageObjects(ctx.cwd),
+    discoverFlowsFromSpecs(ctx.cwd),
+    readFlows(ctx.cwd),
+  ]);
+
+  const parts: string[] = ['# Test Coverage Analysis', ''];
+
+  // Phase 1: Untested page object methods
+  ctx.sendProgress?.('Phase 1/3: Analyzing untested page object methods...');
+  const calledMethods = new Set<string>();
+  for (const spec of specs) {
+    for (const call of spec.calls) {
+      const match = call.match(/\.(\w+)\(/);
+      if (match) calledMethods.add(match[1]);
+    }
+  }
+
+  const untestedMethods: Array<{ className: string; method: string; file: string }> = [];
+  for (const obj of objects) {
+    for (const m of obj.methods) {
+      if (!calledMethods.has(m.name)) {
+        untestedMethods.push({ className: obj.className, method: m.name, file: obj.relativePath });
+      }
+    }
+  }
+
+  parts.push(`## Phase 1: Untested Page Object Methods (${untestedMethods.length})`);
+  parts.push('');
+  if (untestedMethods.length === 0) {
+    parts.push('All page object methods appear in at least one spec.');
+  } else {
+    parts.push('These methods exist in page objects but are never called in any spec file:');
+    parts.push('');
+    const byClass = new Map<string, typeof untestedMethods>();
+    for (const m of untestedMethods) {
+      if (!byClass.has(m.className)) byClass.set(m.className, []);
+      byClass.get(m.className)!.push(m);
+    }
+    for (const [cls, methods] of byClass) {
+      parts.push(`**${cls}** (\`${methods[0].file}\`)`);
+      for (const m of methods) parts.push(`  - ${m.method}()`);
+      parts.push('');
+    }
+  }
+
+  // Phase 2: Missing flow variants
+  ctx.sendProgress?.('Phase 2/3: Checking missing flow variants...');
+  const flows = flowsFile.flows;
+  const flowNames = new Set(flows.map(f => f.flowName));
+  const missingVariants: string[] = [];
+
+  for (const flow of flows) {
+    if (flow.pre_conditions && flow.pre_conditions.length > 0) {
+      const baseName = flow.flowName.split('--')[0];
+      const hasDraftVariant = flowNames.has(`${baseName}--continue-draft`);
+      if (!hasDraftVariant && flow.pre_conditions.some(c => c.toLowerCase().includes('no draft') || c.toLowerCase().includes('clean'))) {
+        missingVariants.push(`\`${baseName}--continue-draft\` — flow "${flow.flowName}" has pre_condition about clean state but no continuation variant`);
+      }
+    }
+
+    if (flow.notes) {
+      for (const note of flow.notes) {
+        const lower = note.toLowerCase();
+        if ((lower.includes('validation') || lower.includes('error')) && !flowNames.has(`${flow.flowName.split('--')[0]}--validation`)) {
+          missingVariants.push(`\`${flow.flowName.split('--')[0]}--validation\` — note mentions "${note.slice(0, 80)}"`);
+        }
+      }
+    }
+  }
+
+  parts.push(`## Phase 2: Missing Flow Variants (${missingVariants.length})`);
+  parts.push('');
+  if (missingVariants.length === 0) {
+    parts.push(flows.length === 0 ? 'No flows stored yet. Save flows with `e2e_save_app_flow` to enable variant analysis.' : 'No missing variants detected.');
+  } else {
+    parts.push('Based on pre_conditions and notes, these flow variants should exist but are missing:');
+    parts.push('');
+    for (const v of missingVariants) parts.push(`- ${v}`);
+  }
+  parts.push('');
+
+  // Phase 3: Uncovered flow steps
+  ctx.sendProgress?.('Phase 3/3: Cross-referencing flow steps with specs...');
+  const uncovered: Array<{ flowName: string; step: string; action: string }> = [];
+  for (const flow of flows) {
+    for (const step of flow.steps) {
+      for (const action of step.required_actions) {
+        const methodMatch = action.match(/(\w+)\(/);
+        if (methodMatch && !calledMethods.has(methodMatch[1])) {
+          uncovered.push({ flowName: flow.flowName, step: step.name, action });
+        }
+      }
+    }
+  }
+
+  parts.push(`## Phase 3: Uncovered Flow Steps (${uncovered.length})`);
+  parts.push('');
+  if (uncovered.length === 0) {
+    parts.push(flows.length === 0 ? 'No flows stored yet.' : 'All confirmed flow steps are exercised by at least one spec.');
+  } else {
+    parts.push('These actions are listed in confirmed flows but no spec file calls them:');
+    parts.push('');
+    const byFlow = new Map<string, typeof uncovered>();
+    for (const u of uncovered) {
+      if (!byFlow.has(u.flowName)) byFlow.set(u.flowName, []);
+      byFlow.get(u.flowName)!.push(u);
+    }
+    for (const [name, items] of byFlow) {
+      parts.push(`**${name}**`);
+      for (const i of items) parts.push(`  - Step "${i.step}": \`${i.action}\``);
+      parts.push('');
+    }
+  }
+
+  // Summary
+  const totalGaps = untestedMethods.length + missingVariants.length + uncovered.length;
+  parts.push('---');
+  parts.push(`**Total gaps found:** ${totalGaps}`);
+  if (totalGaps > 0) {
+    parts.push('Consider adding tests for the identified gaps to improve coverage.');
+  }
+
+  return text(parts.join('\n'));
+}
+
 // ── Context & flow handlers ──
 
 async function handleScanPageObjects(ctx: ToolContext): Promise<ToolResult> {
@@ -975,6 +1399,141 @@ function buildFailureReport(test: TestRunTestEntry, cwd: string, opts: FailureRe
   }
 
   return parts.join('\n');
+}
+
+function buildHtmlReport(run: TestRunResult, cwd: string, sendProgress?: (msg: string) => void): string {
+  const passed = run.tests.filter(t => t.status === 'passed');
+  const failed = run.tests.filter(t => t.status === 'failed');
+  const totalDuration = run.tests.reduce((sum, t) => sum + t.duration, 0);
+  const timestamp = new Date(run.timestamp).toLocaleString();
+
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  let testSections = '';
+  for (let ti = 0; ti < run.tests.length; ti++) {
+    sendProgress?.(`Processing test ${ti + 1}/${run.tests.length}...`);
+    const test = run.tests[ti];
+    const statusClass = test.status === 'passed' ? 'pass' : 'fail';
+    const statusBadge = test.status === 'passed' ? '<span class="badge pass">PASS</span>' : '<span class="badge fail">FAIL</span>';
+
+    let details = '';
+
+    if (test.error) {
+      details += `<div class="section"><h4>Error</h4><pre>${escHtml(test.error)}</pre></div>`;
+    }
+
+    // Action timeline
+    if (test.actions.length > 0) {
+      const failingAction = test.actions.find(a => a.error);
+      let rows = '';
+      for (let i = 0; i < test.actions.length; i++) {
+        const a = test.actions[i];
+        const isFailing = a === failingAction;
+        const rowClass = isFailing ? ' class="fail-row"' : '';
+        const icon = a.error ? '&#10007;' : '&#10003;';
+        const net = a.network?.requests?.length || 0;
+        rows += `<tr${rowClass}><td>${i}</td><td>${icon}</td><td>${escHtml(a.type)}.${escHtml(a.method)}</td><td>${net}</td><td>${formatDuration(a.timing?.durationMs)}</td></tr>`;
+      }
+      details += `<div class="section"><h4>Action Timeline (${test.actions.length})</h4><table><tr><th>#</th><th></th><th>Action</th><th>Net</th><th>Duration</th></tr>${rows}</table></div>`;
+    }
+
+    // Network requests (failed ones highlighted)
+    const allReqs = test.actions.flatMap(a => a.network?.requests || []);
+    const failedReqs = allReqs.filter(r => r.status && r.status >= 400);
+    if (failedReqs.length > 0) {
+      let rows = '';
+      for (const r of failedReqs.slice(0, 20)) {
+        rows += `<tr class="fail-row"><td>${escHtml(r.method)}</td><td>${escHtml(r.url)}</td><td>${r.status}</td><td>${formatDuration(r.durationMs)}</td></tr>`;
+      }
+      details += `<div class="section"><h4>Failed Network Requests (${failedReqs.length})</h4><table><tr><th>Method</th><th>URL</th><th>Status</th><th>Duration</th></tr>${rows}</table></div>`;
+    }
+
+    // Console errors
+    const allConsole = test.actions.flatMap(a => a.console || []);
+    const consoleErrors = allConsole.filter(c => c.type === 'error');
+    if (consoleErrors.length > 0) {
+      const items = consoleErrors.slice(0, 20).map(e => `<li>${escHtml(e.text)}</li>`).join('');
+      details += `<div class="section"><h4>Console Errors (${consoleErrors.length})</h4><ul>${items}</ul></div>`;
+    }
+
+    // DOM snapshot at failure
+    const failingAction = test.actions.find(a => a.error);
+    if (failingAction?.snapshot?.after) {
+      details += `<div class="section"><h4>DOM at Failure</h4><pre>${escHtml(failingAction.snapshot.after.slice(0, 5000))}</pre></div>`;
+    }
+
+    // Screenshots as base64 images
+    const screenshots = test.attachments.filter(a => a.contentType.startsWith('image/'));
+    if (screenshots.length > 0) {
+      sendProgress?.(`Encoding ${screenshots.length} screenshot(s) for test ${ti + 1}...`);
+      let imgs = '';
+      for (const s of screenshots) {
+        try {
+          const data = fs.readFileSync(s.path);
+          const b64 = data.toString('base64');
+          imgs += `<div class="screenshot"><p>${escHtml(s.name)}</p><img src="data:${s.contentType};base64,${b64}" alt="${escHtml(s.name)}"/></div>`;
+        } catch {
+          imgs += `<div class="screenshot"><p>${escHtml(s.name)} (file not found)</p></div>`;
+        }
+      }
+      details += `<div class="section"><h4>Screenshots</h4>${imgs}</div>`;
+    }
+
+    const open = test.status === 'failed' ? ' open' : '';
+    testSections += `<details${open} class="test ${statusClass}"><summary>${statusBadge} <strong>${escHtml(test.test || test.file)}</strong> <span class="dur">${formatDuration(test.duration)}</span></summary>${details}</details>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test Report — ${escHtml(run.runId)}</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 20px; max-width: 1200px; margin: 0 auto; }
+  h1 { margin-bottom: 8px; }
+  .summary { background: #fff; padding: 16px 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); display: flex; gap: 24px; flex-wrap: wrap; align-items: center; }
+  .summary .stat { text-align: center; }
+  .summary .stat .num { font-size: 28px; font-weight: 700; }
+  .summary .stat .label { font-size: 12px; color: #888; text-transform: uppercase; }
+  .pass-num { color: #22863a; }
+  .fail-num { color: #cb2431; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+  .badge.pass { background: #dcffe4; color: #22863a; }
+  .badge.fail { background: #ffdce0; color: #cb2431; }
+  details.test { background: #fff; border-radius: 8px; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  details.test summary { padding: 12px 16px; cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px; }
+  details.test summary::-webkit-details-marker { display: none; }
+  details.test summary::before { content: '▶'; font-size: 10px; transition: transform .2s; }
+  details.test[open] summary::before { transform: rotate(90deg); }
+  .dur { color: #888; font-size: 13px; margin-left: auto; }
+  .section { padding: 12px 16px; border-top: 1px solid #eee; }
+  .section h4 { margin-bottom: 8px; font-size: 14px; }
+  pre { background: #f6f8fa; padding: 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #eee; }
+  th { font-weight: 600; background: #f9f9f9; }
+  .fail-row { background: #fff5f5; }
+  ul { padding-left: 20px; font-size: 13px; }
+  li { margin-bottom: 4px; }
+  .screenshot img { max-width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-top: 4px; }
+  .screenshot p { font-size: 12px; color: #666; }
+  .meta { font-size: 13px; color: #888; margin-bottom: 16px; }
+</style>
+</head>
+<body>
+<h1>Test Report</h1>
+<p class="meta">Run ID: ${escHtml(run.runId)} &middot; ${escHtml(timestamp)}</p>
+<div class="summary">
+  <div class="stat"><div class="num">${run.tests.length}</div><div class="label">Total</div></div>
+  <div class="stat"><div class="num pass-num">${passed.length}</div><div class="label">Passed</div></div>
+  <div class="stat"><div class="num fail-num">${failed.length}</div><div class="label">Failed</div></div>
+  <div class="stat"><div class="num">${formatDuration(totalDuration)}</div><div class="label">Duration</div></div>
+</div>
+${testSections}
+</body>
+</html>`;
 }
 
 // ── DOM utilities ──
