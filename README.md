@@ -15,10 +15,10 @@ A [Claude Code](https://docs.anthropic.com/en/docs/claude-code) plugin that debu
 Then ask Claude to fix a failing test:
 
 ```
-/fix-e2e tests/checkout.spec.ts
+/playwright-autopilot:fix-e2e tests/checkout.spec.ts
 ```
 
-Or run your entire suite and let it investigate failures:
+Or just describe what you need — Claude will use the MCP tools automatically:
 
 ```
 Fix all failing e2e tests in the "e2e" project

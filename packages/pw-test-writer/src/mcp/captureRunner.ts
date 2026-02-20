@@ -45,7 +45,7 @@ class MemoryTarget implements CaptureTarget {
 export async function runTest(
   testLocation: string,
   cwd: string,
-  options?: { timeoutMs?: number; project?: string },
+  options?: { timeoutMs?: number; project?: string; grep?: string },
 ): Promise<TestRunResult> {
   const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const target = new MemoryTarget();
@@ -62,7 +62,7 @@ export async function runTest(
   const startTime = Date.now();
 
   try {
-    const spawnResult = await spawnTest(testLocation, cwd, captureEndpoint, options?.timeoutMs, options?.project);
+    const spawnResult = await spawnTest(testLocation, cwd, captureEndpoint, options?.timeoutMs, options?.project, options?.grep);
     const duration = Date.now() - startTime;
 
     // Collect screenshots
@@ -293,6 +293,7 @@ function spawnTest(
   captureEndpoint: string | null,
   timeoutMs = 120000,
   project?: string,
+  grep?: string,
 ): Promise<SpawnResult> {
   return new Promise((resolve) => {
     const env: NodeJS.ProcessEnv = {
@@ -313,6 +314,7 @@ function spawnTest(
     }
 
     const args = ['test', testLocation];
+    if (grep) args.push('--grep', grep);
     if (project) args.push('--project', project);
     args.push('--reporter=line');
 

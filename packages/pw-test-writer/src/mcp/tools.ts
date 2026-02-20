@@ -42,7 +42,8 @@ export const toolDefs: ToolDef[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        location: { type: 'string', description: 'Test location: file path, file:line, or title grep. Omit to run all tests.' },
+        location: { type: 'string', description: 'Test location: file path or file:line. Omit to run all tests.' },
+        grep: { type: 'string', description: 'Filter tests by title (passed as --grep to Playwright). Use with location to isolate parameterized tests that share the same line number.' },
         project: { type: 'string', description: 'Playwright project name to filter by (e.g. "e2e", "admin", "mobile")' },
       },
     },
@@ -301,7 +302,7 @@ export interface ToolContext {
   runs: RunsMap;
   discoverTests: (cwd: string, project?: string) => Promise<Array<{ path: string; relativePath: string; tests: Array<{ title: string; line: number; fullTitle: string }> }>>;
   discoverProjects: (cwd: string) => Promise<Array<{ name: string; testDir?: string }>>;
-  runTest: (location: string, cwd: string, options?: { project?: string }) => Promise<TestRunResult>;
+  runTest: (location: string, cwd: string, options?: { project?: string; grep?: string }) => Promise<TestRunResult>;
   runProject: (cwd: string, options?: { project?: string }) => Promise<TestRunResult>;
 }
 
@@ -402,6 +403,7 @@ async function handleListProjects(ctx: ToolContext): Promise<ToolResult> {
 
 async function handleRunTest(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolResult> {
   const location = args.location ? String(args.location) : undefined;
+  const grep = args.grep ? String(args.grep) : undefined;
   const project = args.project ? String(args.project) : undefined;
 
   // Batch mode: run all tests when no location specified
@@ -412,7 +414,7 @@ async function handleRunTest(args: Record<string, unknown>, ctx: ToolContext): P
   }
 
   // Single test mode: run with action capture
-  const result = await ctx.runTest(location, ctx.cwd, { project });
+  const result = await ctx.runTest(location, ctx.cwd, { project, grep });
   ctx.runs.set(result.runId, result);
 
   const lines: string[] = [`**Run ID:** \`${result.runId}\``, ''];
