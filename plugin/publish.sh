@@ -11,7 +11,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-MARKETPLACE_REPO="nikolarss0n/playwright-autopilot"
+MARKETPLACE_REPO="kaizen-yutani/playwright-autopilot"
 
 # Read version from plugin.json
 VERSION=$(grep -o '"version": *"[^"]*"' "$SCRIPT_DIR/.claude-plugin/plugin.json" | grep -o '[0-9][0-9.]*')
