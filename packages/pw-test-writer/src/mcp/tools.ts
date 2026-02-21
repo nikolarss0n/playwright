@@ -7,7 +7,7 @@ import * as path from 'path';
 import type { ActionCapture, NetworkRequestCapture } from 'playwright-core/lib/server/actionCaptureTypes';
 import type { TestRunResult, TestRunTestEntry } from './types.js';
 import { scanPageObjects, formatPageObjectIndex, formatPageObjectSummary } from './pageObjects.js';
-import { readFlows, saveFlow, formatFlows, discoverFlowsFromSpecs, formatDiscoveredFlows, deriveFlowName, findFlowForTest, buildFlowFromActions, compareFlows, type AppFlow, type FlowStep } from './flows.js';
+import { readFlows, saveFlow, formatFlows, formatFlowsSummary, discoverFlowsFromSpecs, formatDiscoveredFlows, deriveFlowName, findFlowForTest, buildFlowFromActions, compareFlows, type AppFlow, type FlowStep } from './flows.js';
 
 // ── Tool metadata ──
 
@@ -285,7 +285,7 @@ export const toolDefs: ToolDef[] = [
   },
   {
     name: 'e2e_get_context',
-    description: 'Load project context in one call: stored application flows + page object index. Call this before debugging to understand the project structure and available methods.',
+    description: 'Lightweight project overview: flow names with descriptions + page object class names with method counts. Use `e2e_get_app_flows` for full flow steps and `e2e_scan_page_objects` for full method signatures.',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -1500,7 +1500,7 @@ async function handleGetContext(ctx: ToolContext): Promise<ToolResult> {
 
   const parts: string[] = [];
   parts.push('# Project Context', '');
-  parts.push(formatFlows(flowsFile));
+  parts.push(formatFlowsSummary(flowsFile));
   parts.push('');
   parts.push(formatPageObjectSummary(objects));
   return text(parts.join('\n'));

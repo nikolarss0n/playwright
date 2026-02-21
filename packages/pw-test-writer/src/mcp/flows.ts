@@ -171,6 +171,29 @@ export function saveFlow(cwd: string, flow: AppFlow): FlowsFile {
   return file;
 }
 
+export function formatFlowsSummary(file: FlowsFile): string {
+  if (file.flows.length === 0) {
+    return [
+      '## Application Flows — None stored yet',
+      '',
+      'No confirmed flows in `.e2e-flows.json`. Use `e2e_discover_flows` or `e2e_build_flows` to generate them.',
+    ].join('\n');
+  }
+
+  const lines: string[] = [`## Application Flows (${file.flows.length})`, ''];
+  lines.push('Use `e2e_get_app_flows` for full step details on any flow.', '');
+
+  for (const flow of file.flows) {
+    const status = flow.confirmed ? 'confirmed' : 'unconfirmed';
+    const steps = `${flow.steps.length} steps`;
+    const related = flow.related_flows?.length ? ` | related: ${flow.related_flows.join(', ')}` : '';
+    lines.push(`- **${flow.flowName}** (${status}, ${steps}${related}) — ${flow.description}`);
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
 export function formatFlows(file: FlowsFile): string {
   if (file.flows.length === 0) {
     return [
