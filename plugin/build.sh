@@ -13,6 +13,7 @@ npx esbuild "$PW_DIR/dist/mcp-server.js" \
   --platform=node \
   --target=node20 \
   --format=esm \
+  --external:playwright-core \
   --outfile="$SCRIPT_DIR/server/mcp-server.js" \
   --banner:js='import { createRequire } from "module"; const require = createRequire(import.meta.url);'
 

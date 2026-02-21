@@ -13,13 +13,16 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { toolDefs, handleTool, type RunsMap, type ToolContext } from './tools.js';
 import { discoverTests, discoverProjects, runTest, runProject } from './captureRunner.js';
+import { BrowserContext } from './browser/context.js';
+import { browserToolDefs, handleBrowserTool } from './browser/tools.js';
 import type { TestRunResult } from './types.js';
 
 export function createMcpServer(cwd: string): Server {
   const runs: RunsMap = new Map<string, TestRunResult>();
+  const browserCtx = new BrowserContext();
 
   const server = new Server(
-    { name: 'playwright-autopilot', version: '0.4.0' },
+    { name: 'playwright-autopilot', version: '0.5.0' },
     {
       capabilities: { tools: {} },
       instructions: `E2E Test Capture — Playwright test runner with deep debugging.
@@ -42,6 +45,19 @@ Use this server to run and debug Playwright E2E tests. Prefer these tools over r
    - e2e_get_screenshot — failure screenshot as image
    - e2e_get_test_source — read the test file with the failing test highlighted
 5. Fix the test code, then re-run with e2e_run_test to verify
+
+## Interactive Browser Exploration
+
+Use browser_* tools to explore an application interactively — navigate pages, click elements, fill forms, and observe page state.
+
+**Typical flow:**
+1. \`browser_navigate\` — open a URL (launches browser automatically)
+2. \`browser_snapshot\` — see the page structure with [ref=X] markers
+3. \`browser_click\` / \`browser_type\` / \`browser_select_option\` — interact with elements using their ref
+4. \`browser_take_screenshot\` — capture a visual screenshot
+5. \`browser_close\` — close the browser when done
+
+Each interaction tool returns an action capture (timing, network requests, page changes) and an updated ARIA snapshot.
 
 ## Context Loading
 - \`e2e_run_test\` **auto-loads** the matching flow for the test being run and includes it in the response on failure. It also **auto-saves** flows when tests pass.
@@ -224,8 +240,10 @@ Combine both: use \`repeatEach: 40\` to confirm flakiness, then \`retries: 2\` t
     sendProgress,
   };
 
+  const allToolDefs = [...toolDefs, ...browserToolDefs];
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: toolDefs.map(t => ({
+    tools: allToolDefs.map(t => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
@@ -234,9 +252,20 @@ Combine both: use \`repeatEach: 40\` to confirm flakiness, then \`retries: 2\` t
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    const result = await handleTool(name, (args as Record<string, unknown>) || {}, ctx);
+    const resolvedArgs = (args as Record<string, unknown>) || {};
+
+    if (name.startsWith('browser_')) {
+      const result = await handleBrowserTool(name, resolvedArgs, browserCtx);
+      return result as unknown as CallToolResult;
+    }
+
+    const result = await handleTool(name, resolvedArgs, ctx);
     return result as unknown as CallToolResult;
   });
+
+  server.onclose = async () => {
+    await browserCtx.dispose();
+  };
 
   return server;
 }
