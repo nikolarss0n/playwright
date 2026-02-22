@@ -8,10 +8,10 @@ https://github.com/user-attachments/assets/26f734a5-d05e-41c9-bc3f-2b58561c2ce0
 
 ```bash
 # Add the marketplace
-/plugin marketplace add nikolarss0n/pw-autopilot
+/plugin marketplace add kaizen-yutani/playwright-autopilot
 
 # Install the plugin
-/plugin install playwright-autopilot@pw-autopilot
+/plugin install kaizen-yutani/playwright-autopilot
 ```
 
 Then ask Claude to fix a failing test:
